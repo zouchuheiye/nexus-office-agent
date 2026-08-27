@@ -31,17 +31,20 @@ type Person = { id: string; displayName: string; orgName?: string; positionName?
 type Task = {
   id: string; missionId: string; title: string; description: string; acceptanceCriteria: string; requiredSkills: string[];
   assignmentMode: "direct" | "open_claim"; assigneeId?: string; targetOrgUnitId?: string; publishedBy: string; priority: "critical" | "high" | "medium" | "low";
-  dueAt: string; capacityPoints: number; status: "published" | "assigned" | "claimed" | "in_progress" | "blocked" | "in_review" | "completed" | "cancelled";
+  dueAt: string; startedAt?: string; estimatedDays?: number; dueState?: "overdue" | "due_soon" | "normal" | "done"; capacityPoints: number; status: "published" | "assigned" | "claimed" | "in_progress" | "blocked" | "in_review" | "completed" | "cancelled";
   evidenceRefs: string[]; blockedReason?: string; isTemplate: boolean; missingFields: string[]; version: number;
 };
 type PoolFeedback = { id: string; messageId: string; content: string; authorId: string; createdAt: string };
 type PoolMessage = { id: string; poolKey: string; subject: string; content: string; authorId: string; createdAt: string; feedback: PoolFeedback[] };
 type MessagePool = { key: string; name: string; scope: "company" | "department"; orgUnitId?: string; messages: PoolMessage[] };
 type TaskHandoff = {
-  id: string; packageId: string; fromAssigneeId: string; toAssigneeId: string; note: string; artifactRefs: string[]; status: "pending" | "accepted" | "rejected";
+  id: string; packageId: string; fromAssigneeId: string; toAssigneeId: string; note: string;
+  currentProgress?: string; completedWork?: string; pendingWork?: string; attentionPoints?: string;
+  artifactRefs: string[]; status: "pending" | "accepted" | "rejected";
   responseNote?: string; createdAt: string; respondedAt?: string;
   snapshot: { packageVersion: number; title: string; description: string; acceptanceCriteria: string; evidenceRefs: string[]; dueAt: string };
 };
+type TimelineEvent = { id: string; sequence: number; eventType: string; actorId: string; occurredAt: string; payload: Record<string, unknown> };
 type Workspace = {
   conversation: { id: string; title: string };
   messages: PersistedMessage[];
@@ -70,6 +73,13 @@ const statusCopy: Record<Task["status"], string> = {
   published: "待承接", assigned: "已分派", claimed: "已承接", in_progress: "进行中", blocked: "阻塞", in_review: "待验收", completed: "已完成", cancelled: "已取消",
 };
 const priorityCopy = { critical: "紧急", high: "高", medium: "中", low: "低" } as const;
+const dueCopy: Record<string, string> = { overdue: "已逾期", due_soon: "临期", normal: "进行中", done: "已完成" };
+const timelineEventCopy: Record<string, string> = {
+  mission_published: "使命发布", package_published: "任务发布", package_claimed: "已承接", package_status_changed: "状态变更",
+  package_handoff_initiated: "交接发起", package_handoff_accepted: "交接签收", package_handoff_rejected: "交接退回",
+};
+function dueLabel(task: Task): string { return dueCopy[task.dueState ?? "normal"]; }
+function dueRank(task: Task): number { return task.dueState === "overdue" ? 0 : task.dueState === "due_soon" ? 1 : task.dueState === "done" ? 3 : 2; }
 const officeShortcuts = [
   { label: "任务", icon: ListTodo, prompt: "帮我处理一项任务。先理解目标、时限、相关人员和已有交接链，再决定是直接回答、拆分、分派、承接还是正式交接。" },
   { label: "消息", icon: MessageCircle, prompt: "我需要发一条沟通消息。请先判断它是否只是同步、征询或反馈；若不产生责任人、截止时间和验收，请放入合适的公司或部门消息池。" },
@@ -116,6 +126,18 @@ export function WorkCommandCenter({
   const [busyTask, setBusyTask] = useState("");
   const hydrated = useRef(false);
   const conversationEnd = useRef<HTMLDivElement>(null);
+  const didInitialJump = useRef(false);
+  const stickToBottomRef = useRef(true); // follow new content only while the user is near the bottom
+  const handledCountRef = useRef(0); // last message count we already positioned
+
+  const [timelines, setTimelines] = useState<Record<string, TimelineEvent[]>>({});
+  const loadTimeline = useCallback(async (taskId: string) => {
+    if (timelines[taskId]) return;
+    try {
+      const data = await api<{ task: Task; timeline: TimelineEvent[] }>(`/api/v1/task-command/packages/${taskId}/timeline`, { cache: "no-store" });
+      setTimelines((current) => ({ ...current, [taskId]: data.timeline }));
+    } catch { /* timeline is best-effort */ }
+  }, [timelines]);
 
   const loadWorkspace = useCallback(async () => {
     try {
@@ -150,7 +172,49 @@ export function WorkCommandCenter({
     window.addEventListener("nexus:task-command-changed", refresh);
     return () => { stream.close(); window.removeEventListener("nexus:task-command-changed", refresh); };
   }, [loadWorkspace]);
-  useEffect(() => { conversationEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [messages, isThinking]);
+  useEffect(() => {
+    // On returning to the conversation, jump straight to the latest message (no animation).
+    if (!didInitialJump.current) {
+      if (!messages.length || !workspace) return; // wait for the real workspace hydration
+      didInitialJump.current = true;
+      stickToBottomRef.current = true;
+      handledCountRef.current = messages.length;
+      const frame = window.requestAnimationFrame(() => {
+        const container = conversationEnd.current?.parentElement as HTMLElement | null;
+        if (container) container.scrollTop = container.scrollHeight;
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+    // Skip re-renders that carry the same messages (e.g. re-hydration) so we never move the view.
+    const hasNewContent = messages.length > handledCountRef.current || isThinking;
+    if (!hasNewContent || !stickToBottomRef.current) return;
+    // Follow only while the user is near the bottom; land on the START of a long new answer
+    // so long replies are read from the beginning instead of jumping to their end.
+    const frame = window.requestAnimationFrame(() => {
+      const container = conversationEnd.current?.parentElement as HTMLElement | null;
+      if (!container) return;
+      const messagesList = Array.from(container.querySelectorAll<HTMLElement>(".command-message"));
+      const last = messagesList[messagesList.length - 1];
+      if (last && last.offsetHeight >= container.clientHeight - 8) {
+        last.scrollIntoView({ block: "start" });
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
+    });
+    handledCountRef.current = messages.length;
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, isThinking, workspace]);
+
+  // Remember whether the user is reading near the bottom, so auto-follow never yanks them away from history.
+  useEffect(() => {
+    const container = conversationEnd.current?.parentElement as HTMLElement | null;
+    if (!container) return;
+    const onScroll = () => {
+      stickToBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight <= 96;
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, []);
 
   const tasks = taskMode === "mine" ? workspace?.myTasks ?? [] : taskMode === "available" ? workspace?.availableTasks ?? [] : taskMode === "published" ? workspace?.publishedByMe ?? [] : workspace?.pendingHandoffs.map(({ task }) => task) ?? [];
   const peopleById = useMemo(() => new Map(workspace?.people.map((person) => [person.id, person]) ?? []), [workspace]);
@@ -238,19 +302,22 @@ export function WorkCommandCenter({
             <button type="button" role="tab" aria-selected={taskMode === "handoffs"} className={taskMode === "handoffs" ? "active" : ""} onClick={() => setTaskMode("handoffs")}><FileCheck2 size={14} />待交接 <b>{workspace?.pendingHandoffs.length ?? 0}</b></button>
           </div>
           <div className="task-rail-list">
-          {loading && !workspace ? <TaskRailState icon={LoaderCircle} title="正在同步任务" detail="" spinning /> : error && !workspace ? <TaskRailState icon={CircleAlert} title="任务暂时不可用" detail={error} action={() => void loadWorkspace()} /> : !tasks.length ? <TaskRailState icon={CircleDashed} title={taskMode === "mine" ? "没有待处理任务" : taskMode === "available" ? "没有可承接任务" : taskMode === "handoffs" ? "没有待签收交接" : "还没有发布任务"} detail="" /> : tasks.map((task) => {
+          {loading && !workspace ? <TaskRailState icon={LoaderCircle} title="正在同步任务" detail="" spinning /> : error && !workspace ? <TaskRailState icon={CircleAlert} title="任务暂时不可用" detail={error} action={() => void loadWorkspace()} /> : !tasks.length ? <TaskRailState icon={CircleDashed} title={taskMode === "mine" ? "没有待处理任务" : taskMode === "available" ? "没有可承接任务" : taskMode === "handoffs" ? "没有待签收交接" : "还没有发布任务"} detail="" /> : (() => { const sortedTasks = [...tasks].sort((left, right) => dueRank(left) - dueRank(right)); return sortedTasks.map((task, index) => {
             const taskHandoffs = handoffsByPackage.get(task.id) ?? [];
             const pendingHandoff = pendingHandoffsByTask.get(task.id);
-            return <article className={`task-dispatch-card is-${task.status}${task.isTemplate ? " is-template" : ""}`} key={task.id}>
-            <div className="task-dispatch-top"><span className={`task-priority is-${task.priority}`}>{task.isTemplate ? "模板" : priorityCopy[task.priority]}</span><span className="task-state"><i />{task.isTemplate ? "待补充" : statusCopy[task.status]}</span></div>
+            const prevDue = index > 0 ? sortedTasks[index - 1].dueState ?? "normal" : null;
+            const showDueHeader = (taskMode === "mine" || taskMode === "published") && (task.dueState ?? "normal") !== prevDue;
+            return <div className="task-rail-group" key={task.id}>{showDueHeader ? <div className="task-due-group-label">{dueLabel(task)} · {sortedTasks.filter((item) => (item.dueState ?? "normal") === (task.dueState ?? "normal")).length}</div> : null}<article className={`task-dispatch-card is-${task.status}${task.isTemplate ? " is-template" : ""}`}>
+            <div className="task-dispatch-top"><span className={`task-priority is-${task.priority}`}>{task.isTemplate ? "模板" : priorityCopy[task.priority]}</span>{!task.isTemplate && task.dueState && ["overdue", "due_soon"].includes(task.dueState) ? <span className={`task-due is-${task.dueState}`}>{dueLabel(task)}</span> : null}<span className="task-state"><i />{task.isTemplate ? "待补充" : statusCopy[task.status]}</span></div>
             <h3>{task.title}</h3><p>{task.description}</p>
-            <dl><div><dt>接收对象</dt><dd>{task.assigneeId ? peopleById.get(task.assigneeId)?.displayName ?? "已指派成员" : task.targetOrgUnitId ? `${orgUnitsById.get(task.targetOrgUnitId)?.name ?? "指定部门"}待承接` : "公司公开承接"}</dd></div><div><dt>截止</dt><dd>{formatDate(task.dueAt)}</dd></div></dl>
+            <dl><div><dt>接收对象</dt><dd>{task.assigneeId ? peopleById.get(task.assigneeId)?.displayName ?? "已指派成员" : task.targetOrgUnitId ? `${orgUnitsById.get(task.targetOrgUnitId)?.name ?? "指定部门"}待承接` : "公司公开承接"}</dd></div>{task.startedAt ? <div><dt>开始</dt><dd>{formatDate(task.startedAt)}</dd></div> : null}<div><dt>截止</dt><dd>{formatDate(task.dueAt)}{task.dueState === "overdue" ? " · 已逾期" : task.dueState === "due_soon" ? " · 临期" : ""}</dd></div>{task.estimatedDays ? <div><dt>工期</dt><dd>{task.estimatedDays} 天</dd></div> : null}</dl>
             <details className="task-acceptance"><summary>验收标准</summary><p>{task.acceptanceCriteria}</p></details>
             {task.isTemplate && task.missingFields.length ? <div className="task-template-missing">待补充：{task.missingFields.join("、")}</div> : null}
-            {taskHandoffs.length ? <details className="task-handoff-trail"><summary>交接链 · {taskHandoffs.length} 棒{taskHandoffs.some(({ status }) => status === "pending") ? " · 待签收" : ""}</summary>{taskHandoffs.slice(-4).map((handoff) => <div className="task-handoff-line" key={handoff.id}><span>{peopleById.get(handoff.fromAssigneeId)?.displayName ?? "前负责人"}<ArrowRight size={11} />{peopleById.get(handoff.toAssigneeId)?.displayName ?? "接收人"}</span><small>{handoff.status === "pending" ? "待签收" : handoff.status === "accepted" ? "已签收" : "已退回"} · 文件/资料 {handoff.artifactRefs.length} · v{handoff.snapshot.packageVersion}</small><p>{handoff.note}</p>{handoff.responseNote ? <p className="task-handoff-response">{handoff.responseNote}</p> : null}</div>)}</details> : null}
-            {taskMode === "mine" && task.assigneeId && !taskHandoffs.some(({ status }) => status === "pending") && !["in_review", "completed", "cancelled"].includes(task.status) ? <button className="task-handoff-action" type="button" onClick={() => onQueryChange(`我需要正式交接任务“${task.title}”。请先通过 work.get_task_handoff_trail 核验现有交接链和文件/资料引用，再确认交给哪位当前可用成员、交接说明和文件/资料引用；确认后用 work.initiate_task_handoff 发起版本 ${task.version} 的交接。`)}>发起交接<ArrowRight size={13} /></button> : null}
+            {taskHandoffs.length ? <details className="task-handoff-trail"><summary>交接链 · {taskHandoffs.length} 棒{taskHandoffs.some(({ status }) => status === "pending") ? " · 待签收" : ""}</summary>{taskHandoffs.slice(-4).map((handoff) => <div className="task-handoff-line" key={handoff.id}><span>{peopleById.get(handoff.fromAssigneeId)?.displayName ?? "前负责人"}<ArrowRight size={11} />{peopleById.get(handoff.toAssigneeId)?.displayName ?? "接收人"}</span><small>{handoff.status === "pending" ? "待签收" : handoff.status === "accepted" ? "已签收" : "已退回"} · 文件/资料 {handoff.artifactRefs.length} · v{handoff.snapshot.packageVersion}</small><p>{handoff.note}</p>{handoff.currentProgress ? <p className="task-handoff-field"><b>当前进度</b>{handoff.currentProgress}</p> : null}{handoff.completedWork ? <p className="task-handoff-field"><b>已完成</b>{handoff.completedWork}</p> : null}{handoff.pendingWork ? <p className="task-handoff-field"><b>未完成</b>{handoff.pendingWork}</p> : null}{handoff.attentionPoints ? <p className="task-handoff-field"><b>注意</b>{handoff.attentionPoints}</p> : null}{handoff.responseNote ? <p className="task-handoff-response">{handoff.responseNote}</p> : null}</div>)}</details> : null}
+            <details className="task-timeline" onToggle={(event) => { if (event.currentTarget.open) void loadTimeline(task.id); }}><summary>时间线 · {timelines[task.id]?.length ?? 0} 条</summary>{(timelines[task.id] ?? []).map((item) => <div className="task-timeline-line" key={item.id}><span>{timelineEventCopy[item.eventType] ?? item.eventType}</span><small>{formatDate(item.occurredAt)}</small></div>)}</details>
+            {taskMode === "mine" && task.assigneeId && !taskHandoffs.some(({ status }) => status === "pending") && !["in_review", "completed", "cancelled"].includes(task.status) ? <button className="task-handoff-action" type="button" onClick={() => onQueryChange(`我需要正式交接任务“${task.title}”。请先通过 work.get_task_handoff_trail 核验现有交接链和文件/资料引用，再向我确认：交给哪位当前可用成员、交接说明、当前进度、已完成部分、未完成部分和注意事项；确认后用 work.initiate_task_handoff 发起版本 ${task.version} 的交接。`)}>发起交接<ArrowRight size={13} /></button> : null}
             <footer>{task.isTemplate && taskMode === "published" ? <button onClick={() => onQueryChange(`补充任务模板“${task.title}”，模板 ID 为 ${task.id}，当前版本为 ${task.version}。请先询问我想补充哪些字段，再使用 work.update_task_template 更新；不要正式分派。`)}>补充模板<ArrowRight size={13} /></button> : taskMode === "handoffs" && pendingHandoff ? <><button onClick={() => onQueryChange(`请先使用 work.get_task_handoff_trail 核验待我签收的交接 ${pendingHandoff.id} 与文件/资料引用。若信息完整，我决定签收该交接，请使用 work.respond_to_task_handoff，handoffId 为 ${pendingHandoff.id}，任务当前版本为 ${task.version}。`)}>签收交接<Check size={13} /></button><button className="task-handoff-reject" onClick={() => onQueryChange(`请先使用 work.get_task_handoff_trail 核验交接 ${pendingHandoff.id}。我需要退回此交接，请向我询问退回原因后使用 work.respond_to_task_handoff，handoffId 为 ${pendingHandoff.id}，任务当前版本为 ${task.version}。`)}>退回</button></> : taskMode === "available" ? <button disabled={busyTask === task.id} onClick={() => void claim(task)}>{busyTask === task.id ? "承接中…" : "承接"}<ArrowRight size={13} /></button> : taskMode === "mine" && ["assigned", "claimed"].includes(task.status) ? <button disabled={busyTask === task.id} onClick={() => void transition(task, "in_progress")}>开始<ArrowRight size={13} /></button> : taskMode === "mine" && task.status === "in_progress" ? <button onClick={() => onQueryChange(`任务“${task.title}”已完成执行，请使用 work.update_my_task 工具将任务 ${task.id}（当前版本 ${task.version}）提交验收，并附上证据引用：`)}>提交验收<Check size={13} /></button> : taskMode === "mine" && task.status === "blocked" ? <button disabled={busyTask === task.id} onClick={() => void transition(task, "in_progress")}>解除阻塞<ArrowRight size={13} /></button> : taskMode === "mine" && task.status === "in_review" ? <button onClick={() => onQueryChange(`任务“${task.title}”已通过验收，请使用 work.update_my_task 工具将任务 ${task.id}（当前版本 ${task.version}）标记完成，证据引用为：`)}>完成<ArrowRight size={13} /></button> : <span>{formatRelative(task.dueAt)}</span>}</footer>
-          </article>})}
+          </article></div>}); })()}
           </div>
         </> : <div className="message-pool-list">
           {loading && !workspace ? <TaskRailState icon={LoaderCircle} title="正在同步消息" detail="" spinning /> : error && !workspace ? <TaskRailState icon={CircleAlert} title="消息池暂时不可用" detail={error} action={() => void loadWorkspace()} /> : !workspace?.messagePools.some((pool) => pool.messages.length) ? <TaskRailState icon={MessageCircle} title="还没有沟通消息" detail="推送只用于同步、征询和反馈，不会创建任务。" /> : workspace.messagePools.map((pool) => <section className="message-pool-section" key={pool.key}><header><span>{pool.scope === "company" ? "公司" : "部门"}</span><h3>{pool.name}</h3><b>{pool.messages.length}</b></header>{pool.messages.map((message) => <article className="message-pool-card" key={message.id}><h4>{message.subject}</h4><p>{message.content}</p><footer><span>{peopleById.get(message.authorId)?.displayName ?? "成员"} · {formatTime(message.createdAt)}</span><button type="button" onClick={() => onQueryChange(`我想针对消息“${message.subject}”补充反馈。请使用 communication.add_feedback 工具向消息 ${message.id} 写入以下反馈：`)}>{message.feedback.length ? `${message.feedback.length} 条反馈` : "反馈"}</button></footer>{message.feedback.length ? <details><summary>查看反馈</summary>{message.feedback.slice(-3).map((feedback) => <p className="message-pool-feedback" key={feedback.id}><b>{peopleById.get(feedback.authorId)?.displayName ?? "成员"}</b>{feedback.content}</p>)}</details> : null}</article>)}</section>)}
@@ -269,3 +336,5 @@ function formatRelative(value: string) {
   const hours = Math.round((Date.parse(value) - Date.now()) / 3_600_000);
   return hours < 0 ? `逾期 ${Math.abs(hours)} 小时` : hours < 24 ? `${hours} 小时后截止` : `${Math.ceil(hours / 24)} 天后截止`;
 }
+
+

@@ -38,7 +38,7 @@ describe("Task command HTTP API", () => {
         acceptanceCriteria: "提供完成证据并进入验收。",
         requiredSkills: ["交付"],
         assignmentMode: "open_claim",
-        priority: "medium",
+startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7,         priority: "medium",
         dueAt: "2030-08-30T10:00:00.000Z",
         capacityPoints: 2,
       }],
@@ -99,7 +99,7 @@ describe("Task command HTTP API", () => {
     const marker = crypto.randomUUID().slice(0, 8);
     const published = await publishMission(request("http://localhost/api/v1/task-command/missions", {
       conversationId, title: `交接 API ${marker}`, objective: "验证正式任务交接接口保留内容与文件链。", priority: "high", dueAt: "2030-09-01T10:00:00.000Z",
-      packages: [{ title: `交接任务 ${marker}`, description: "准备交接资料。", acceptanceCriteria: "接收方可核验全部资料。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: "10000000-0000-4000-8000-000000000001", priority: "high", dueAt: "2030-08-30T10:00:00.000Z", capacityPoints: 2 }],
+      packages: [{ title: `交接任务 ${marker}`, description: "准备交接资料。", acceptanceCriteria: "接收方可核验全部资料。", requiredSkills: ["交付"], startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7, assignmentMode: "direct", assigneeId: "10000000-0000-4000-8000-000000000001", priority: "high", dueAt: "2030-08-30T10:00:00.000Z", capacityPoints: 2 }],
     }));
     const task = (await published.json()).data.packages[0];
     const artifact = await registerArtifact(request("http://localhost/api/v1/task-command/artifacts", {
@@ -110,7 +110,7 @@ describe("Task command HTTP API", () => {
     const artifactPayload = await artifact.json();
     const artifactId = artifactPayload.data.artifact.id as string;
     const handoff = await initiateHandoff(
-      request(`http://localhost/api/v1/task-command/packages/${task.id}/handoffs`, { expectedVersion: 1, toAssigneeId: DEMO_PRODUCT_OWNER_ID, note: "资料已校验，请继续完成产品侧复核。", artifactIds: [artifactId] }),
+      request(`http://localhost/api/v1/task-command/packages/${task.id}/handoffs`, { expectedVersion: 1, toAssigneeId: DEMO_PRODUCT_OWNER_ID, note: "资料已校验，请继续完成产品侧复核。", currentProgress: "资料已校验，进入产品侧复核。", completedWork: "资料校验完成。", pendingWork: "产品侧复核与签字。", artifactIds: [artifactId] }),
       { params: Promise.resolve({ id: task.id }) },
     );
     expect(handoff.status).toBe(201);

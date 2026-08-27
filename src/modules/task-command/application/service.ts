@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { RequestContext } from "@/src/platform/context/request-context";
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
-import type { AppendPoolFeedbackInput, AppendTaskArtifactVersionInput, CreateTaskTemplateInput, InitiateTaskHandoffInput, PublishMissionInput, PublishPoolMessageInput, RegisterTaskArtifactInput, RespondToTaskHandoffInput, TransitionPackageInput, UpdateTaskTemplateInput } from "@/src/modules/task-command/application/schemas";
-import { claimWorkPackage, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, handoffWorkPackage, respondToTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
+import type { AppendPoolFeedbackInput, AppendTaskArtifactVersionInput, CreateTaskTemplateInput, ExportReportInput, GeneratePeriodicSummaryInput, InitiateTaskHandoffInput, PublishMissionInput, PublishPoolMessageInput, RegisterTaskArtifactInput, RespondToTaskHandoffInput, RunReminderScanInput, TransitionPackageInput, UpdateTaskTemplateInput } from "@/src/modules/task-command/application/schemas";
+import { claimWorkPackage, collectTaskReminderCandidates, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, deterministicUuid, dueStateOf, handoffWorkPackage, respondToTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkTaskEvent, type WorkTaskHandoff, type WorkTaskHandoffArtifactSnapshot, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
 
 function hasPermission(context: RequestContext, permission: string): boolean {
   const [resource, action] = permission.split(":");
@@ -29,6 +29,12 @@ function canAccessOrgScope(context: RequestContext, orgUnitId: string): boolean 
   );
 }
 
+type WorkPackageWithDue = WorkPackage & { dueState: "overdue" | "due_soon" | "normal" | "done" };
+
+function withDueState(item: WorkPackage): WorkPackageWithDue {
+  return { ...item, dueState: dueStateOf(item) };
+}
+
 type TemplateFieldValues = {
   objective: string;
   description: string;
@@ -39,6 +45,8 @@ type TemplateFieldValues = {
   targetOrgUnitId?: string;
   priority: "critical" | "high" | "medium" | "low";
   dueAt: string;
+  startedAt?: string;
+  estimatedDays?: number;
   capacityPoints: number;
 };
 
@@ -52,6 +60,8 @@ function updateTemplateMissingFields(current: WorkTemplateField[], input: Update
   if (has("requiredSkills")) setField("所需技能", values.requiredSkills.length > 0);
   if (has("priority")) setField("优先级", Boolean(values.priority));
   if (has("dueAt")) setField("截止时间", Boolean(values.dueAt));
+  if (has("startedAt")) setField("任务开始时间", Boolean(values.startedAt));
+  if (has("estimatedDays")) setField("工期", values.estimatedDays != null);
   if (has("capacityPoints")) setField("容量点", Boolean(values.capacityPoints));
   if (has("assignmentMode") || has("assigneeId") || has("targetOrgUnitId")) setField("负责人或承接范围", values.assignmentMode === "direct" ? Boolean(values.assigneeId) : Boolean(values.targetOrgUnitId));
   return [...missing];
@@ -92,11 +102,11 @@ export class TaskCommandService {
       people,
       orgUnits,
       missions: missions.filter((mission) => visible.some((item) => item.missionId === mission.id)),
-      myTasks: visible.filter((item) => item.assigneeId === context.actorId && !item.isTemplate && !["completed", "cancelled"].includes(item.status)),
-      availableTasks: visible.filter((item) => !item.isTemplate && item.assignmentMode === "open_claim" && item.status === "published" && !item.assigneeId),
-      publishedByMe: visible.filter((item) => item.publishedBy === context.actorId),
-      templates: visible.filter((item) => item.publishedBy === context.actorId && item.isTemplate),
-      handoffTasks: visible.filter((item) => handoffParticipantPackageIds.has(item.id)),
+      myTasks: visible.filter((item) => item.assigneeId === context.actorId && !item.isTemplate && !["completed", "cancelled"].includes(item.status)).map(withDueState),
+      availableTasks: visible.filter((item) => !item.isTemplate && item.assignmentMode === "open_claim" && item.status === "published" && !item.assigneeId).map(withDueState),
+      publishedByMe: visible.filter((item) => item.publishedBy === context.actorId).map(withDueState),
+      templates: visible.filter((item) => item.publishedBy === context.actorId && item.isTemplate).map(withDueState),
+      handoffTasks: visible.filter((item) => handoffParticipantPackageIds.has(item.id)).map(withDueState),
       handoffs: visibleHandoffs,
       pendingHandoffs: visibleHandoffs.filter((item) => item.status === "pending" && item.toAssigneeId === context.actorId).flatMap((handoff) => {
         const task = visible.find((item) => item.id === handoff.packageId);
@@ -145,7 +155,17 @@ export class TaskCommandService {
       event({ tenantId: context.tenantId, missionId: bundle.mission.id, eventType: "mission_published", actorId: context.actorId, audience: "tenant", payload: { title: bundle.mission.title, packageCount: bundle.packages.length } }),
       ...bundle.packages.map((item) => event({ tenantId: context.tenantId, missionId: item.missionId, packageId: item.id, eventType: "package_published", actorId: context.actorId, audience: item.assignmentMode === "open_claim" ? "tenant" : "participants", payload: { title: item.title, assigneeId: item.assigneeId, assignmentMode: item.assignmentMode, version: item.version } })),
     ];
-    return this.repository.publishMission(bundle.mission, bundle.packages, events);
+    const warnings: string[] = [];
+    for (const item of input.packages) {
+      if (item.assignmentMode === "direct" && item.assigneeId) {
+        const person = people.find((entry) => entry.id === item.assigneeId);
+        if (person && (person.inProgressTaskCount >= 5 || person.capacityPoints >= 20)) {
+          warnings.push(`负责人 ${person.displayName} 当前负载较高（进行中 ${person.inProgressTaskCount} 项 / 容量点 ${person.capacityPoints}），请确认是否继续定向分派。`);
+        }
+      }
+    }
+    const result = await this.repository.publishMission(bundle.mission, bundle.packages, events);
+    return { ...result, warnings };
   }
 
   async createTaskTemplate(context: RequestContext, input: CreateTaskTemplateInput, execution?: { sourceRunId?: string; source?: "human" | "agent" }) {
@@ -193,11 +213,13 @@ export class TaskCommandService {
     const requiredSkills = input.requiredSkills ?? current.requiredSkills;
     const priority = input.priority ?? current.priority;
     const dueAt = input.dueAt ?? current.dueAt;
+    const startedAt = input.startedAt ?? current.startedAt;
+    const estimatedDays = input.estimatedDays ?? current.estimatedDays;
     const capacityPoints = input.capacityPoints ?? current.capacityPoints;
-    const missingFields = updateTemplateMissingFields(current.missingFields, input, { objective, description, acceptanceCriteria, requiredSkills, assignmentMode, assigneeId, targetOrgUnitId, priority, dueAt, capacityPoints });
+    const missingFields = updateTemplateMissingFields(current.missingFields, input, { objective, description, acceptanceCriteria, requiredSkills, assignmentMode, assigneeId, targetOrgUnitId, priority, dueAt, startedAt, estimatedDays, capacityPoints });
     const timestamp = new Date().toISOString();
     const nextMission = { ...mission, title, objective, priority, dueAt, version: mission.version + 1, updatedAt: timestamp, missingFields };
-    const nextPackage = { ...current, title, description, acceptanceCriteria, requiredSkills: [...new Set(requiredSkills)], assignmentMode, assigneeId, targetOrgUnitId, priority, dueAt, capacityPoints, version: current.version + 1, updatedAt: timestamp, missingFields };
+    const nextPackage = { ...current, title, description, acceptanceCriteria, requiredSkills: [...new Set(requiredSkills)], assignmentMode, assigneeId, targetOrgUnitId, priority, dueAt, startedAt, estimatedDays, capacityPoints, version: current.version + 1, updatedAt: timestamp, missingFields };
     const changed = await this.repository.updateTaskTemplate({ currentMission: mission, nextMission, currentPackage: current, nextPackage, expectedVersion: input.expectedVersion, event: event({ tenantId: context.tenantId, missionId: current.missionId, packageId: current.id, eventType: "package_status_changed", actorId: context.actorId, audience: "participants", payload: { template: true, missingFields, version: nextPackage.version } }) });
     if (!changed) throw new Error("WORK_PACKAGE_VERSION_CONFLICT");
     return { mission: nextMission, task: nextPackage, missingFields };
@@ -259,6 +281,10 @@ export class TaskCommandService {
       toAssigneeId: target.id,
       initiatedBy: context.actorId,
       note: input.note,
+      currentProgress: input.currentProgress,
+      completedWork: input.completedWork,
+      pendingWork: input.pendingWork,
+      attentionPoints: input.attentionPoints,
       artifactRefs,
       artifactSnapshots,
       snapshot: {
@@ -481,6 +507,168 @@ export class TaskCommandService {
       { key: "company", name: "全公司", scope: "company" as const },
       ...orgUnits.filter((unit) => canModerate || actorOrgUnitIds.has(unit.id) || canAccessOrgScope(context, unit.id)).map((unit) => ({ key: unit.id, name: unit.name, scope: "department" as const, orgUnitId: unit.id })),
     ];
+  }
+
+  /** RQ-2/F-078: full lifecycle timeline for one visible task. */
+  async taskTimeline(context: RequestContext, taskId: string) {
+    requirePermission(context, "work_task:read");
+    const task = await this.requirePackage(context.tenantId, taskId);
+    if (!(await this.isTaskVisible(context, task))) throw new Error("WORK_TASK_NOT_VISIBLE");
+    const timeline = await this.repository.listPackageEvents(context.tenantId, taskId);
+    return { task: withDueState(task), timeline };
+  }
+
+  /** RQ-4/F-080: read-only progress fact card for the agent. */
+  async taskProgressFact(context: RequestContext, taskId: string) {
+    requirePermission(context, "work_task:read");
+    const task = await this.requirePackage(context.tenantId, taskId);
+    if (!(await this.isTaskVisible(context, task))) throw new Error("WORK_TASK_NOT_VISIBLE");
+    const [timeline, handoffs] = await Promise.all([
+      this.repository.listPackageEvents(context.tenantId, taskId),
+      this.repository.listHandoffs(context.tenantId, [taskId]),
+    ]);
+    return { task: withDueState(task), timeline, handoffs };
+  }
+
+  /** F-082: read-only board of all visible tasks with due state. */
+  async board(context: RequestContext) {
+    requirePermission(context, "work_task:read");
+    const [workspace, people, orgUnits] = await Promise.all([
+      this.workspace(context),
+      this.repository.listPeople(context.tenantId),
+      this.repository.listOrgUnits(context.tenantId),
+    ]);
+    const byId = new Map<string, WorkPackageWithDue>();
+    for (const list of [workspace.myTasks, workspace.availableTasks, workspace.publishedByMe, workspace.handoffTasks]) {
+      for (const item of list) if (!byId.has(item.id)) byId.set(item.id, item);
+    }
+    const tasks = [...byId.values()].filter((item) => !item.isTemplate);
+    return { tasks, people, orgUnits, actorId: context.actorId, generatedAt: new Date().toISOString() };
+  }
+
+  /** F-084: 成员负载只读视图（供 Agent 定向分派前查询）。 */
+  async memberWorkload(context: RequestContext) {
+    requirePermission(context, "work_task:read");
+    return this.repository.listPeople(context.tenantId);
+  }
+
+  /** F-086: 进度报表导出数据（按人/项目/时段过滤）。 */
+  async exportReport(context: RequestContext, input: ExportReportInput) {
+    requirePermission(context, "work_task:read");
+    const [packages, missions, people] = await Promise.all([
+      this.repository.listPackages(context.tenantId),
+      this.repository.listMissions(context.tenantId),
+      this.repository.listPeople(context.tenantId),
+    ]);
+    const missionById = new Map(missions.map((item) => [item.id, item]));
+    const peopleById = new Map(people.map((item) => [item.id, item]));
+    const from = input.from ? new Date(input.from).getTime() : null;
+    const to = input.to ? new Date(input.to).getTime() : null;
+    const rows = packages
+      .filter((item) => !item.isTemplate)
+      .filter((item) => !input.assigneeId || item.assigneeId === input.assigneeId)
+      .filter((item) => !input.missionId || item.missionId === input.missionId)
+      .filter((item) => { const due = new Date(item.dueAt).getTime(); return (!from || due >= from) && (!to || due <= to); })
+      .map((item) => {
+        const assignee = item.assigneeId ? peopleById.get(item.assigneeId) : undefined;
+        return {
+          id: item.id,
+          title: item.title,
+          missionTitle: missionById.get(item.missionId)?.title ?? "",
+          status: item.status,
+          assigneeName: assignee?.displayName ?? "",
+          orgName: assignee?.orgName ?? "",
+          priority: item.priority,
+          startedAt: item.startedAt ?? "",
+          dueAt: item.dueAt,
+          estimatedDays: item.estimatedDays ?? "",
+          capacityPoints: item.capacityPoints,
+          dueState: dueStateOf(item),
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        };
+      });
+    const headers = ["任务ID", "任务标题", "所属任务/项目", "状态", "负责人", "部门", "优先级", "开始时间", "截止时间", "工期(天)", "容量点", "到期状态", "创建时间", "更新时间"];
+    return { headers, rows, count: rows.length, generatedAt: new Date().toISOString() };
+  }
+
+  /** 后台到期提醒 + F-085 阻塞升级扫描（每天/每小时由脚本触发，池消息按 source_run_id 幂等去重）。 */
+  async runReminderScan(context: RequestContext, input: RunReminderScanInput) {
+    requirePermission(context, "work_task:read");
+    requirePermission(context, "message_pool:publish");
+    const now = input.now ? new Date(input.now) : new Date();
+    const dueSoonHours = input.dueSoonHours ?? 72;
+    const blockedEscalationHours = input.blockedEscalationHours ?? 24;
+    const [packages, people] = await Promise.all([
+      this.repository.listPackages(context.tenantId),
+      this.repository.listPeople(context.tenantId),
+    ]);
+    const peopleById = new Map(people.map((item) => [item.id, item]));
+    const active = packages.filter((item) => !item.isTemplate && !["completed", "cancelled"].includes(item.status));
+    const dateKey = now.toISOString().slice(0, 10);
+    const candidates = collectTaskReminderCandidates(packages, { now, dueSoonHours, blockedEscalationHours });
+    const created: Array<{ kind: string; packageId: string; messageId: string }> = [];
+    let deduplicated = 0;
+    for (const candidate of candidates) {
+      const assignee = candidate.package.assigneeId ? peopleById.get(candidate.package.assigneeId) : undefined;
+      const subject = candidate.kind === "overdue" ? `⏰ 任务逾期提醒：${candidate.package.title}`
+        : candidate.kind === "due_soon" ? `⏰ 任务临期提醒：${candidate.package.title}`
+        : `🚧 任务阻塞升级：${candidate.package.title}`;
+      const content = candidate.kind === "blocked_escalation"
+        ? `任务「${candidate.package.title}」已阻塞约 ${candidate.hours.toFixed(1)} 天（阻塞原因：${candidate.package.blockedReason ?? "未填写"}）。请发布人与负责人确认处置。截止 ${candidate.package.dueAt}。`
+        : `任务「${candidate.package.title}」${candidate.kind === "overdue" ? `已逾期约 ${candidate.hours.toFixed(1)} 天` : `约 ${candidate.hours.toFixed(1)} 天后到期`}，负责人：${assignee?.displayName ?? (candidate.package.assignmentMode === "open_claim" ? "待承接" : "未分派")}，截止 ${candidate.package.dueAt}。请及时推进。`;
+      const dedupKey = `${candidate.kind === "blocked_escalation" ? "task-escalation" : "task-reminder"}:${candidate.package.id}:${candidate.kind}:${dateKey}`;
+      const message = { ...createPoolMessage({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", subject, content, authorId: context.actorId, source: "agent" }), id: deterministicUuid(dedupKey) };
+      const result = await this.repository.publishPoolMessage(message, messageEvent({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", messageId: message.id, eventType: "message_published", actorId: context.actorId }));
+      if (result.created) created.push({ kind: candidate.kind, packageId: candidate.package.id, messageId: result.message.id });
+      else deduplicated += 1;
+    }
+    return { scanned: active.length, candidates: candidates.length, created: created.length, deduplicated, items: created, ranAt: now.toISOString() };
+  }
+
+  /** F-083: 周期进度摘要（日报/周报草稿），发布到公司消息池（按期间幂等）。 */
+  async generatePeriodicSummary(context: RequestContext, input: GeneratePeriodicSummaryInput) {
+    requirePermission(context, "work_task:read");
+    requirePermission(context, "message_pool:publish");
+    const scope = input.scope ?? "daily";
+    const now = input.now ? new Date(input.now) : new Date();
+    const [workspace, packages] = await Promise.all([
+      this.workspace(context),
+      this.repository.listPackages(context.tenantId),
+    ]);
+    const dateKey = now.toISOString().slice(0, 10);
+    const weekKey = (() => { const d = new Date(now); const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); return d.toISOString().slice(0, 10); })();
+    const periodKey = scope === "weekly" ? weekKey : dateKey;
+    const done = packages.filter((item) => !item.isTemplate && ["completed", "cancelled"].includes(item.status) && (item.assigneeId === context.actorId || item.publishedBy === context.actorId));
+    const byStatus = (list: Array<WorkPackage & { dueState?: string }>) => ({
+      total: list.length,
+      overdue: list.filter((item) => item.dueState === "overdue").length,
+      dueSoon: list.filter((item) => item.dueState === "due_soon").length,
+      blocked: list.filter((item) => item.status === "blocked").length,
+    });
+    const mine = byStatus(workspace.myTasks);
+    const published = byStatus(workspace.publishedByMe);
+    const available = byStatus(workspace.availableTasks);
+    const content = [
+      `【工作进度摘要 · ${scope === "weekly" ? "周报" : "日报"} · ${periodKey}】`,
+      `- 我负责：${mine.total} 项（逾期 ${mine.overdue} / 临期 ${mine.dueSoon} / 阻塞 ${mine.blocked}）`,
+      `- 我发布：${published.total} 项（逾期 ${published.overdue} / 临期 ${published.dueSoon} / 阻塞 ${published.blocked}）`,
+      `- 待承接：${available.total} 项（逾期 ${available.overdue} / 临期 ${available.dueSoon}）`,
+      `- 已完成/已取消：${done.length} 项`,
+      `请确认后发出；如需详细任务列表可进入任务进度看板查看。`,
+    ].join("\n");
+    const message = { ...createPoolMessage({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", subject: `工作进度摘要（${scope === "weekly" ? "周报" : "日报"} · ${periodKey}）`, content, authorId: context.actorId, source: "agent" }), id: deterministicUuid(`task-summary:${scope}:${periodKey}`) };
+    const result = await this.repository.publishPoolMessage(message, messageEvent({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", messageId: message.id, eventType: "message_published", actorId: context.actorId }));
+    return { scope, periodKey, summary: content, messageId: result.message.id, created: result.created, generatedAt: now.toISOString() };
+  }
+  private async isTaskVisible(context: RequestContext, task: WorkPackage): Promise<boolean> {
+    if (task.publishedBy === context.actorId || task.assigneeId === context.actorId) return true;
+    if (task.assignmentMode === "open_claim" && task.status === "published" && !task.assigneeId) {
+      const people = await this.repository.listPeople(context.tenantId);
+      const actorOrgUnitIds = new Set(people.filter((person) => person.id === context.actorId).flatMap((person) => person.orgUnitId ? [person.orgUnitId] : []));
+      return !task.targetOrgUnitId || canAccessOrgScope(context, task.targetOrgUnitId) || actorOrgUnitIds.has(task.targetOrgUnitId);
+    }
+    return (await this.repository.listHandoffs(context.tenantId, [task.id])).some((item) => item.fromAssigneeId === context.actorId || item.toAssigneeId === context.actorId);
   }
 
   private async requirePackage(tenantId: string, id: string): Promise<WorkPackage> {

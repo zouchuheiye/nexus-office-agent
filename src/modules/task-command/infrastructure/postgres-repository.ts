@@ -24,7 +24,7 @@ const mapMission = (row: Row): WorkMission => ({
 const mapPackage = (row: Row): WorkPackage => ({
   id: text(row.id), tenantId: text(row.tenant_id), missionId: text(row.mission_id), ordinal: Number(row.ordinal), title: text(row.title), description: text(row.description),
   acceptanceCriteria: text(row.acceptance_criteria), requiredSkills: json<string[]>(row.required_skills), assignmentMode: row.assignment_mode as WorkPackage["assignmentMode"],
-  assigneeId: optionalText(row.assignee_id), targetOrgUnitId: optionalText(row.target_org_unit_id), publishedBy: text(row.published_by), priority: row.priority as WorkPackage["priority"], dueAt: text(row.due_at), capacityPoints: Number(row.capacity_points),
+  assigneeId: optionalText(row.assignee_id), targetOrgUnitId: optionalText(row.target_org_unit_id), publishedBy: text(row.published_by), priority: row.priority as WorkPackage["priority"], dueAt: text(row.due_at), startedAt: optionalText(row.started_at), estimatedDays: row.estimated_days === null || row.estimated_days === undefined ? undefined : Number(row.estimated_days), capacityPoints: Number(row.capacity_points),
   status: row.status as WorkPackage["status"], evidenceRefs: json<string[]>(row.evidence_refs), blockedReason: optionalText(row.blocked_reason), claimedAt: optionalText(row.claimed_at),
   completedAt: optionalText(row.completed_at), version: Number(row.version), createdAt: text(row.created_at), updatedAt: text(row.updated_at),
   isTemplate: Boolean(row.is_template), missingFields: json<WorkPackage["missingFields"]>(row.missing_fields ?? []),
@@ -35,7 +35,7 @@ const mapEvent = (row: Row): WorkTaskEvent => ({
 });
 const mapHandoff = (row: Row): WorkTaskHandoff => ({
   id: text(row.id), tenantId: text(row.tenant_id), packageId: text(row.package_id), missionId: text(row.mission_id), fromAssigneeId: text(row.from_assignee_id), toAssigneeId: text(row.to_assignee_id),
-  initiatedBy: text(row.initiated_by), note: text(row.note), artifactRefs: json<string[]>(row.artifact_refs), artifactSnapshots: json<WorkTaskHandoff["artifactSnapshots"]>(row.artifact_snapshots), snapshot: json<WorkTaskHandoff["snapshot"]>(row.package_snapshot),
+  initiatedBy: text(row.initiated_by), note: text(row.note), currentProgress: optionalText(row.current_progress), completedWork: optionalText(row.completed_work), pendingWork: optionalText(row.pending_work), attentionPoints: optionalText(row.attention_points), artifactRefs: json<string[]>(row.artifact_refs), artifactSnapshots: json<WorkTaskHandoff["artifactSnapshots"]>(row.artifact_snapshots), snapshot: json<WorkTaskHandoff["snapshot"]>(row.package_snapshot),
   source: row.source as WorkTaskHandoff["source"], sourceRunId: optionalText(row.source_run_id), status: row.status as WorkTaskHandoff["status"], responseNote: optionalText(row.response_note),
   respondedBy: optionalText(row.responded_by), responseRunId: optionalText(row.response_run_id), createdAt: text(row.created_at), respondedAt: optionalText(row.responded_at),
 });
@@ -93,7 +93,10 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
   async listPeople(tenantId: string): Promise<WorkPerson[]> {
     return this.database.withTenant(tenantId, async (db) => (await db.query(
       `SELECT u.id::text,u.display_name,m.org_unit_id::text,ou.name AS org_name,p.name AS position_name,
-         count(wp.id) FILTER (WHERE wp.status NOT IN ('completed','cancelled'))::int AS active_task_count
+         count(wp.id) FILTER (WHERE wp.status NOT IN ('completed','cancelled'))::int AS active_task_count,
+         count(wp.id) FILTER (WHERE wp.status IN ('assigned','claimed','in_progress'))::int AS in_progress_task_count,
+         count(wp.id) FILTER (WHERE wp.status NOT IN ('completed','cancelled') AND wp.due_at <= now() + interval '7 days')::int AS due_soon_task_count,
+         COALESCE(sum(wp.capacity_points) FILTER (WHERE wp.status NOT IN ('completed','cancelled')),0)::int AS capacity_points
        FROM users u
        LEFT JOIN memberships m ON m.tenant_id=u.tenant_id AND m.user_id=u.id AND m.starts_at<=now() AND (m.ends_at IS NULL OR m.ends_at>now())
        LEFT JOIN org_units ou ON ou.tenant_id=m.tenant_id AND ou.id=m.org_unit_id
@@ -101,7 +104,7 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
        LEFT JOIN work_packages wp ON wp.tenant_id=u.tenant_id AND wp.assignee_id=u.id
        WHERE u.tenant_id=$1 AND u.status='active' AND u.archived_at IS NULL
        GROUP BY u.id,u.display_name,m.org_unit_id,ou.name,p.name ORDER BY active_task_count,u.display_name`, [tenantId],
-    )).map((row) => ({ id: text(row.id), displayName: text(row.display_name), orgUnitId: optionalText(row.org_unit_id), orgName: optionalText(row.org_name), positionName: optionalText(row.position_name), activeTaskCount: Number(row.active_task_count) })));
+    )).map((row) => ({ id: text(row.id), displayName: text(row.display_name), orgUnitId: optionalText(row.org_unit_id), orgName: optionalText(row.org_name), positionName: optionalText(row.position_name), activeTaskCount: Number(row.active_task_count), inProgressTaskCount: Number(row.in_progress_task_count), dueSoonTaskCount: Number(row.due_soon_task_count), capacityPoints: Number(row.capacity_points) })));
   }
 
   async listOrgUnits(tenantId: string): Promise<WorkOrgUnit[]> {
@@ -138,9 +141,9 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
         WHERE tenant_id=$1 AND id=$2 AND version=$11 AND is_template=true RETURNING id`,
         [input.currentMission.tenantId,input.currentMission.id,input.nextMission.title,input.nextMission.objective,input.nextMission.priority,input.nextMission.dueAt,input.nextMission.isTemplate,input.nextMission.missingFields,input.nextMission.version,input.nextMission.updatedAt,input.currentMission.version]);
       if (!missionRows.length) return false;
-      const packageRows = await db.query(`UPDATE work_packages SET title=$3,description=$4,acceptance_criteria=$5,required_skills=$6,assignment_mode=$7,assignee_id=$8,target_org_unit_id=$9,priority=$10,due_at=$11,capacity_points=$12,is_template=$13,missing_fields=$14,version=$15,updated_at=$16
-        WHERE tenant_id=$1 AND id=$2 AND version=$17 AND is_template=true RETURNING id`,
-        [input.currentPackage.tenantId,input.currentPackage.id,input.nextPackage.title,input.nextPackage.description,input.nextPackage.acceptanceCriteria,input.nextPackage.requiredSkills,input.nextPackage.assignmentMode,input.nextPackage.assigneeId ?? null,input.nextPackage.targetOrgUnitId ?? null,input.nextPackage.priority,input.nextPackage.dueAt,input.nextPackage.capacityPoints,input.nextPackage.isTemplate,input.nextPackage.missingFields,input.nextPackage.version,input.nextPackage.updatedAt,input.expectedVersion]);
+      const packageRows = await db.query(`UPDATE work_packages SET title=$3,description=$4,acceptance_criteria=$5,required_skills=$6,assignment_mode=$7,assignee_id=$8,target_org_unit_id=$9,priority=$10,due_at=$11,started_at=$12,estimated_days=$13,capacity_points=$14,is_template=$15,missing_fields=$16,version=$17,updated_at=$18
+        WHERE tenant_id=$1 AND id=$2 AND version=$19 AND is_template=true RETURNING id`,
+        [input.currentPackage.tenantId,input.currentPackage.id,input.nextPackage.title,input.nextPackage.description,input.nextPackage.acceptanceCriteria,input.nextPackage.requiredSkills,input.nextPackage.assignmentMode,input.nextPackage.assigneeId ?? null,input.nextPackage.targetOrgUnitId ?? null,input.nextPackage.priority,input.nextPackage.dueAt,input.nextPackage.startedAt ?? null,input.nextPackage.estimatedDays ?? null,input.nextPackage.capacityPoints,input.nextPackage.isTemplate,input.nextPackage.missingFields,input.nextPackage.version,input.nextPackage.updatedAt,input.expectedVersion]);
       if (!packageRows.length) throw new Error("WORK_PACKAGE_VERSION_CONFLICT");
       await this.insertEvent(db, input.event);
       return true;
@@ -159,6 +162,12 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
     void actorId;
     return this.database.withTenant(tenantId, async (db) => (await db.query(
       "SELECT * FROM work_task_events WHERE tenant_id=$1 AND sequence>$2 ORDER BY sequence LIMIT $3", [tenantId,after,limit],
+    )).map(mapEvent));
+  }
+
+  async listPackageEvents(tenantId: string, packageId: string) {
+    return this.database.withTenant(tenantId, async (db) => (await db.query(
+      "SELECT * FROM work_task_events WHERE tenant_id=$1 AND package_id=$2 ORDER BY sequence", [tenantId,packageId],
     )).map(mapEvent));
   }
 
@@ -212,9 +221,9 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
 
   async initiateHandoff(handoff: WorkTaskHandoff, event: Omit<WorkTaskEvent, "sequence">) {
     return this.database.withTenant(handoff.tenantId, async (db) => {
-      const inserted = await db.query(`INSERT INTO work_task_handoffs(id,tenant_id,package_id,mission_id,from_assignee_id,to_assignee_id,initiated_by,note,artifact_refs,artifact_snapshots,package_snapshot,source,source_run_id,status,created_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT DO NOTHING RETURNING id`,
-      [handoff.id,handoff.tenantId,handoff.packageId,handoff.missionId,handoff.fromAssigneeId,handoff.toAssigneeId,handoff.initiatedBy,handoff.note,handoff.artifactRefs,handoff.artifactSnapshots,handoff.snapshot,handoff.source,handoff.sourceRunId ?? null,handoff.status,handoff.createdAt]);
+      const inserted = await db.query(`INSERT INTO work_task_handoffs(id,tenant_id,package_id,mission_id,from_assignee_id,to_assignee_id,initiated_by,note,current_progress,completed_work,pending_work,attention_points,artifact_refs,artifact_snapshots,package_snapshot,source,source_run_id,status,created_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT DO NOTHING RETURNING id`,
+      [handoff.id,handoff.tenantId,handoff.packageId,handoff.missionId,handoff.fromAssigneeId,handoff.toAssigneeId,handoff.initiatedBy,handoff.note,handoff.currentProgress ?? null,handoff.completedWork ?? null,handoff.pendingWork ?? null,handoff.attentionPoints ?? null,handoff.artifactRefs,handoff.artifactSnapshots,handoff.snapshot,handoff.source,handoff.sourceRunId ?? null,handoff.status,handoff.createdAt]);
       if (!inserted.length && handoff.sourceRunId) {
         const rows = await db.query("SELECT * FROM work_task_handoffs WHERE tenant_id=$1 AND source_run_id=$2", [handoff.tenantId,handoff.sourceRunId]);
         if (rows[0]) return { handoff: mapHandoff(rows[0]), created: false };
@@ -272,8 +281,10 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
       const inserted = await db.query(`INSERT INTO work_pool_messages(id,tenant_id,pool_scope,org_unit_id,subject,content,author_id,source,source_run_id,created_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id`,
       [message.id,message.tenantId,message.poolScope,message.orgUnitId ?? null,message.subject,message.content,message.authorId,message.source,message.sourceRunId ?? null,message.createdAt]);
-      if (!inserted.length && message.sourceRunId) {
-        const rows = await db.query("SELECT * FROM work_pool_messages WHERE tenant_id=$1 AND source_run_id=$2", [message.tenantId,message.sourceRunId]);
+      if (!inserted.length) {
+        const rows = message.sourceRunId
+          ? await db.query("SELECT * FROM work_pool_messages WHERE tenant_id=$1 AND source_run_id=$2", [message.tenantId,message.sourceRunId])
+          : await db.query("SELECT * FROM work_pool_messages WHERE tenant_id=$1 AND id=$2", [message.tenantId,message.id]);
         if (rows[0]) return { message: mapPoolMessage(rows[0]), created: false };
       }
       if (!inserted.length) throw new Error("MESSAGE_POOL_MESSAGE_CONFLICT");
@@ -305,9 +316,9 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
   }
 
   private async insertPackage(db: DatabaseExecutor, value: WorkPackage) {
-    await db.query(`INSERT INTO work_packages(id,tenant_id,mission_id,ordinal,title,description,acceptance_criteria,required_skills,assignment_mode,assignee_id,target_org_unit_id,published_by,priority,due_at,capacity_points,status,evidence_refs,blocked_reason,claimed_at,completed_at,is_template,missing_fields,version,created_at,updated_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
-      [value.id,value.tenantId,value.missionId,value.ordinal,value.title,value.description,value.acceptanceCriteria,value.requiredSkills,value.assignmentMode,value.assigneeId ?? null,value.targetOrgUnitId ?? null,value.publishedBy,value.priority,value.dueAt,value.capacityPoints,value.status,value.evidenceRefs,value.blockedReason ?? null,value.claimedAt ?? null,value.completedAt ?? null,value.isTemplate,value.missingFields,value.version,value.createdAt,value.updatedAt]);
+    await db.query(`INSERT INTO work_packages(id,tenant_id,mission_id,ordinal,title,description,acceptance_criteria,required_skills,assignment_mode,assignee_id,target_org_unit_id,published_by,priority,due_at,started_at,estimated_days,capacity_points,status,evidence_refs,blocked_reason,claimed_at,completed_at,is_template,missing_fields,version,created_at,updated_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
+      [value.id,value.tenantId,value.missionId,value.ordinal,value.title,value.description,value.acceptanceCriteria,value.requiredSkills,value.assignmentMode,value.assigneeId ?? null,value.targetOrgUnitId ?? null,value.publishedBy,value.priority,value.dueAt,value.startedAt ?? null,value.estimatedDays ?? null,value.capacityPoints,value.status,value.evidenceRefs,value.blockedReason ?? null,value.claimedAt ?? null,value.completedAt ?? null,value.isTemplate,value.missingFields,value.version,value.createdAt,value.updatedAt]);
   }
 
   private async insertEvent(db: DatabaseExecutor, value: Omit<WorkTaskEvent, "sequence">) {

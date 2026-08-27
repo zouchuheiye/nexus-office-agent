@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DataClassification } from "@/src/platform/security/data-classification";
 
 export type WorkPriority = "critical" | "high" | "medium" | "low";
@@ -7,7 +7,7 @@ export type WorkMissionStatus = "active" | "completed" | "cancelled";
 export type WorkPackageStatus = "published" | "assigned" | "claimed" | "in_progress" | "blocked" | "in_review" | "completed" | "cancelled";
 export type WorkTaskHandoffStatus = "pending" | "accepted" | "rejected";
 export type WorkArtifactStatus = "active" | "revoked";
-export type WorkTemplateField = "工作目标" | "任务说明" | "负责人或承接范围" | "截止时间" | "验收标准" | "优先级" | "容量点" | "所需技能";
+export type WorkTemplateField = "工作目标" | "任务说明" | "负责人或承接范围" | "截止时间" | "验收标准" | "优先级" | "容量点" | "所需技能" | "任务开始时间" | "工期";
 
 export type WorkConversation = {
   id: string;
@@ -39,6 +39,12 @@ export type WorkPerson = {
   orgName?: string;
   positionName?: string;
   activeTaskCount: number;
+  /** F-084: 进行中（assigned/claimed/in_progress）任务数 */
+  inProgressTaskCount: number;
+  /** F-084: 7 天内到期（未完成）任务数 */
+  dueSoonTaskCount: number;
+  /** F-084: 未完成任务容量点合计 */
+  capacityPoints: number;
 };
 
 export type WorkOrgUnit = {
@@ -83,6 +89,8 @@ export type WorkPackage = {
   missingFields: WorkTemplateField[];
   priority: WorkPriority;
   dueAt: string;
+  startedAt?: string;
+  estimatedDays?: number;
   capacityPoints: number;
   status: WorkPackageStatus;
   evidenceRefs: string[];
@@ -166,6 +174,10 @@ export type WorkTaskHandoff = {
   toAssigneeId: string;
   initiatedBy: string;
   note: string;
+  currentProgress?: string;
+  completedWork?: string;
+  pendingWork?: string;
+  attentionPoints?: string;
   /** @deprecated Unversioned reference retained solely for backwards-compatible migration. */
   artifactRefs: string[];
   artifactSnapshots: WorkTaskHandoffArtifactSnapshot[];
@@ -264,6 +276,8 @@ export function createMissionBundle(input: {
     targetOrgUnitId?: string;
     priority: WorkPriority;
     dueAt: string;
+    startedAt?: string;
+    estimatedDays?: number;
     capacityPoints: number;
     isTemplate?: boolean;
     missingFields?: WorkTemplateField[];
@@ -283,12 +297,15 @@ export function createMissionBundle(input: {
     if (item.assignmentMode === "direct" && !item.assigneeId) throw new Error("WORK_ASSIGNEE_REQUIRED");
     if (item.assignmentMode === "direct" && item.targetOrgUnitId) throw new Error("WORK_DIRECT_TARGET_ORG_FORBIDDEN");
     if (item.assignmentMode === "open_claim" && item.assigneeId) throw new Error("WORK_OPEN_CLAIM_ASSIGNEE_FORBIDDEN");
+    if (!(input.isTemplate ?? false) && !item.startedAt) throw new Error("WORK_START_TIME_REQUIRED");
+    if (!(input.isTemplate ?? false) && !item.estimatedDays) throw new Error("WORK_ESTIMATED_DAYS_REQUIRED");
+    if (item.startedAt && item.dueAt && new Date(item.startedAt).getTime() >= new Date(item.dueAt).getTime()) throw new Error("WORK_INVALID_TIME_RANGE");
     return {
       id: randomUUID(), tenantId: input.tenantId, missionId: mission.id, ordinal: index + 1,
       title: item.title, description: item.description, acceptanceCriteria: item.acceptanceCriteria,
       requiredSkills: [...new Set(item.requiredSkills)], assignmentMode: item.assignmentMode, assigneeId: item.assigneeId,
       targetOrgUnitId: item.targetOrgUnitId,
-      publishedBy: input.publishedBy, isTemplate: item.isTemplate ?? input.isTemplate ?? false, missingFields: [...new Set(item.missingFields ?? input.missingFields ?? [])], priority: item.priority, dueAt: item.dueAt, capacityPoints: item.capacityPoints,
+      publishedBy: input.publishedBy, isTemplate: item.isTemplate ?? input.isTemplate ?? false, missingFields: [...new Set(item.missingFields ?? input.missingFields ?? [])], priority: item.priority, dueAt: item.dueAt, startedAt: item.startedAt, estimatedDays: item.estimatedDays, capacityPoints: item.capacityPoints,
       status: item.assignmentMode === "direct" ? "assigned" : "published", evidenceRefs: [], version: 1,
       createdAt: timestamp, updatedAt: timestamp,
     };
@@ -309,6 +326,8 @@ export function createTaskTemplateBundle(input: {
   targetOrgUnitId?: string;
   priority?: WorkPriority;
   dueAt?: string;
+  startedAt?: string;
+  estimatedDays?: number;
   capacityPoints?: number;
   publishedBy: string;
   source: WorkMission["source"];
@@ -322,12 +341,16 @@ export function createTaskTemplateBundle(input: {
   const assignmentMode: AssignmentMode = input.assignmentMode === "direct" && !input.assigneeId ? "open_claim" : input.assignmentMode ?? "open_claim";
   const priority = input.priority ?? "medium";
   const dueAt = input.dueAt ?? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const startedAt = input.startedAt ?? now.toISOString();
+  const estimatedDays = input.estimatedDays ?? 7;
   const capacityPoints = input.capacityPoints ?? 1;
   if (!input.objective?.trim()) missingFields.push("工作目标");
   if (!input.description?.trim()) missingFields.push("任务说明");
   if (!input.acceptanceCriteria?.trim()) missingFields.push("验收标准");
   if (!input.assignmentMode || (assignmentMode === "direct" && !input.assigneeId) || (assignmentMode === "open_claim" && !input.targetOrgUnitId)) missingFields.push("负责人或承接范围");
   if (!input.dueAt) missingFields.push("截止时间");
+  if (!input.startedAt) missingFields.push("任务开始时间");
+  if (!input.estimatedDays) missingFields.push("工期");
   if (!input.priority) missingFields.push("优先级");
   if (!input.capacityPoints) missingFields.push("容量点");
   if (!requiredSkills.length) missingFields.push("所需技能");
@@ -335,10 +358,58 @@ export function createTaskTemplateBundle(input: {
     tenantId: input.tenantId, conversationId: input.conversationId, title: input.title.trim(), objective,
     priority, dueAt, publishedBy: input.publishedBy, source: input.source, sourceRunId: input.sourceRunId, isTemplate: true, missingFields,
     packages: [{ title: input.title.trim(), description, acceptanceCriteria, requiredSkills, assignmentMode, assigneeId: assignmentMode === "direct" ? input.assigneeId : undefined,
-      targetOrgUnitId: assignmentMode === "open_claim" ? input.targetOrgUnitId : undefined, priority, dueAt, capacityPoints, isTemplate: true, missingFields }],
+      targetOrgUnitId: assignmentMode === "open_claim" ? input.targetOrgUnitId : undefined, priority, dueAt, startedAt, estimatedDays, capacityPoints, isTemplate: true, missingFields }],
   }, now);
 }
 
+export type WorkDueState = "overdue" | "due_soon" | "normal" | "done";
+
+export function dueStateOf(task: Pick<WorkPackage, "status" | "dueAt">, now = new Date()): WorkDueState {
+  if (task.status === "completed" || task.status === "cancelled") return "done";
+  const due = new Date(task.dueAt).getTime();
+  const current = now.getTime();
+  if (due < current) return "overdue";
+  if (due <= current + 48 * 60 * 60 * 1000) return "due_soon";
+  return "normal";
+}
+
+export type TaskReminderCandidate = {
+  kind: "overdue" | "due_soon" | "blocked_escalation";
+  package: WorkPackage;
+  /** 与提醒相关的时长（逾期/临期按天，阻塞按天）。 */
+  hours: number;
+};
+
+/** 后台提醒扫描的纯逻辑：找出需要提醒的候选任务（临期/逾期/阻塞升级）。 */
+export function collectTaskReminderCandidates(packages: WorkPackage[], options: { now?: Date; dueSoonHours?: number; blockedEscalationHours?: number } = {}): TaskReminderCandidate[] {
+  const now = options.now ?? new Date();
+  const dueSoonHours = options.dueSoonHours ?? 72;
+  const blockedEscalationHours = options.blockedEscalationHours ?? 24;
+  const active = packages.filter((item) => !item.isTemplate && !["completed", "cancelled"].includes(item.status));
+  const candidates: TaskReminderCandidate[] = [];
+  for (const item of active) {
+    if (item.status === "blocked") continue; // 阻塞任务走升级通道，避免重复提醒
+    const diffHours = (new Date(item.dueAt).getTime() - now.getTime()) / 3_600_000;
+    if (diffHours < 0) candidates.push({ kind: "overdue", package: item, hours: Math.abs(diffHours) });
+    else if (diffHours <= dueSoonHours) candidates.push({ kind: "due_soon", package: item, hours: diffHours });
+  }
+  for (const item of active.filter((entry) => entry.status === "blocked")) {
+    const blockedHours = (now.getTime() - new Date(item.updatedAt).getTime()) / 3_600_000;
+    if (blockedHours >= blockedEscalationHours) candidates.push({ kind: "blocked_escalation", package: item, hours: blockedHours });
+  }
+  return candidates;
+}
+const REMINDER_UUID_NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+
+/** 由业务键生成确定性 UUID（UUIDv5）：同一键永远得到同一 ID，用于消息幂等去重。 */
+export function deterministicUuid(name: string): string {
+  const namespace = Buffer.from(REMINDER_UUID_NAMESPACE.replace(/-/g, ""), "hex");
+  const digest = createHash("sha1").update(namespace).update(Buffer.from(name, "utf8")).digest();
+  digest[6] = (digest[6] & 0x0f) | 0x50;
+  digest[8] = (digest[8] & 0x3f) | 0x80;
+  const hex = digest.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
 export function createPoolMessage(input: Omit<WorkPoolMessage, "id" | "createdAt">, now = new Date()): WorkPoolMessage {
   return { ...input, id: randomUUID(), createdAt: now.toISOString() };
 }
@@ -352,6 +423,10 @@ export function createTaskHandoff(input: Omit<WorkTaskHandoff, "id" | "createdAt
     ...input,
     id: randomUUID(),
     note: input.note.trim(),
+    currentProgress: input.currentProgress?.trim() || undefined,
+    completedWork: input.completedWork?.trim() || undefined,
+    pendingWork: input.pendingWork?.trim() || undefined,
+    attentionPoints: input.attentionPoints?.trim() || undefined,
     artifactRefs: [...new Set(input.artifactRefs)],
     artifactSnapshots: [...new Map(input.artifactSnapshots.map((item) => [item.artifactVersionId, item])).values()],
     snapshot: {

@@ -29,7 +29,9 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "ops:backup": "tsx scripts/backup.ts",
     "ops:restore": "tsx scripts/restore.ts",
-    "ops:smoke": "tsx scripts/http-performance-smoke.ts"
+    "ops:smoke": "tsx scripts/http-performance-smoke.ts",
+      "task:reminder": "tsx scripts/task-reminder.ts",
+      "task:summary": "tsx scripts/task-summary.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.84.2",

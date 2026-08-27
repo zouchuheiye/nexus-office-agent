@@ -375,3 +375,11 @@
 - 2026-08-05：M1 平台地基 Gate 通过；项目进入 M2。M1 证据不能用于声称完整业务或真实三平台集成完成。
 - 2026-08-05：M0 设计基线通过，项目进入 M1；完整项目仍未完成，三平台真实验收依赖后续测试企业授权。
 - 2026-08-05：0.1.0 原型验收通过，但其证据不能用于证明生产领域能力。
+
+
+- 2026-08-27：任务进度落地第一批验收（本地工程范围），证据 E-064。检查范围：F-077 发布必填门禁与工期字段（422/201 冒烟 + 专项测试）、F-078 时间线（GET timeline 200 + 专项测试）、F-079 临期/逾期 dueState（专项测试）、F-080 AI 只读事实卡工具（专项测试）。结论：通过（本地工程）。遗留：真实 PostgreSQL、后台到期提醒、看板/报表/交接单仍待开发或外部环境；6 项 firecracker 沙箱测试失败为 Windows 沙箱 C:\ 根目录写权限 EPERM，与本批无关且为预存问题。
+
+
+- 2026-08-27：第二批验收（本地工程范围），证据 E-065。检查范围：F-081 结构化交接单（专项测试断言字段落库并在签收后保留；前端交接链展示）、F-082 看板（board 接口返回可见任务+dueState+actorId 且排除模板；模块页按状态分列+逾期高亮+过滤）。结论：通过（本地工程）。遗留：真实 PostgreSQL、后台到期提醒、F-083～F-086 待后续；firecracker 沙箱 4 项测试失败为 Windows C:\ 写权限 EPERM（预存环境问题，与本批无关）。
+
+- 2026-08-27：第三批验收（本地工程范围），证据 E-103。检查范围：F-083 周期摘要（service.generatePeriodicSummary + scripts/task-summary.ts，日报/周报草稿按期间幂等发布）、F-084 成员负载（Postgres/InMemory listPeople 负载统计 + memberWorkload + 只读工具 work.get_member_workload + 定向分派负载过高 warnings + 看板成员负载条）、F-085 阻塞升级（collectTaskReminderCandidates 纯函数 + 扫描升级消息，阻塞任务走升级通道避免重复提醒）、F-086 报表导出（exportReport + GET /api/v1/task-command/reports/export CSV/JSON + 看板导出按钮）、后台到期提醒（runReminderScan 临期≤72h/逾期 + 确定性 UUID 幂等去重）。结论：通过（本地工程，真实 PostgreSQL）。验证：typecheck 0 错误、相关单测 28/28、真实库冒烟（负载字段正确、提醒 created=3→再扫 dedup=3→拨快5天 overdue=3、公司池 7 条提醒/摘要、CSV/JSON 导出正确）。遗留：postgres 集成测试 PGlite/WASM 在 Node24 环境 worker 崩溃为既有环境问题（git HEAD 同崩，与本批无关）；blocked 升级未在真实库造 24h 旧数据，用纯函数单测覆盖。

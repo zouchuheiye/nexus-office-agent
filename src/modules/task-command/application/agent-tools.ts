@@ -6,13 +6,15 @@ import { ToolRegistry } from "@/src/modules/agent/domain/tool";
 const claimSchema = z.object({ taskId: z.uuid(), expectedVersion: z.number().int().positive() }).strict();
 const updateSchema = transitionPackageSchema.extend({ taskId: z.uuid() }).strict();
 const respondHandoffSchema = respondToTaskHandoffSchema.extend({ handoffId: z.uuid() }).strict();
+const taskFactSchema = z.object({ taskId: z.uuid() }).strict();
 
 const createTemplateJsonSchema = {
   type: "object", additionalProperties: false,
   properties: {
     conversationId: { type: "string", format: "uuid" }, title: { type: "string" }, objective: { type: "string" }, description: { type: "string" }, acceptanceCriteria: { type: "string" },
     requiredSkills: { type: "array", items: { type: "string" } }, assignmentMode: { type: "string", enum: ["direct", "open_claim"] }, assigneeId: { type: "string", format: "uuid" }, targetOrgUnitId: { type: "string", format: "uuid" },
-    priority: { type: "string", enum: ["critical", "high", "medium", "low"] }, dueAt: { type: "string", format: "date-time" }, capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
+    priority: { type: "string", enum: ["critical", "high", "medium", "low"] }, dueAt: { type: "string", format: "date-time" }, startedAt: { type: "string", format: "date-time" }, estimatedDays: { type: "integer", minimum: 1, maximum: 365 },
+    capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
   }, required: ["conversationId", "title"],
 } as const;
 
@@ -21,7 +23,8 @@ const updateTemplateJsonSchema = {
   properties: {
     taskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 }, title: { type: "string" }, objective: { type: "string" }, description: { type: "string" }, acceptanceCriteria: { type: "string" },
     requiredSkills: { type: "array", items: { type: "string" } }, assignmentMode: { type: "string", enum: ["direct", "open_claim"] }, assigneeId: { type: ["string", "null"], format: "uuid" }, targetOrgUnitId: { type: ["string", "null"], format: "uuid" },
-    priority: { type: "string", enum: ["critical", "high", "medium", "low"] }, dueAt: { type: "string", format: "date-time" }, capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
+    priority: { type: "string", enum: ["critical", "high", "medium", "low"] }, dueAt: { type: "string", format: "date-time" }, startedAt: { type: "string", format: "date-time" }, estimatedDays: { type: "integer", minimum: 1, maximum: 365 },
+    capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
   }, required: ["taskId", "expectedVersion"],
 } as const;
 
@@ -33,8 +36,9 @@ const publishJsonSchema = {
     packages: { type: "array", minItems: 1, maxItems: 20, items: { type: "object", additionalProperties: false, properties: {
       title: { type: "string" }, description: { type: "string" }, acceptanceCriteria: { type: "string" }, requiredSkills: { type: "array", items: { type: "string" } },
       assignmentMode: { type: "string", enum: ["direct", "open_claim"] }, assigneeId: { type: "string", format: "uuid" }, targetOrgUnitId: { type: "string", format: "uuid" }, priority: { type: "string", enum: ["critical", "high", "medium", "low"] },
-      dueAt: { type: "string", format: "date-time" }, capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
-    }, required: ["title", "description", "acceptanceCriteria", "requiredSkills", "assignmentMode", "priority", "dueAt", "capacityPoints"] } },
+      dueAt: { type: "string", format: "date-time" }, startedAt: { type: "string", format: "date-time" }, estimatedDays: { type: "integer", minimum: 1, maximum: 365 },
+      capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
+    }, required: ["title", "description", "acceptanceCriteria", "requiredSkills", "assignmentMode", "priority", "dueAt", "startedAt", "estimatedDays", "capacityPoints"] } },
   }, required: ["conversationId", "title", "objective", "priority", "dueAt", "packages"],
 } as const;
 
@@ -93,8 +97,10 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
     requiredPermissions: ["work_task:handoff"], riskLevel: 2, confirmationPolicy: "always", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 3,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
     inputJsonSchema: { type: "object", additionalProperties: false, properties: {
-      taskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 }, toAssigneeId: { type: "string", format: "uuid" }, note: { type: "string" }, artifactIds: { type: "array", items: { type: "string", format: "uuid" }, maxItems: 40 },
-    }, required: ["taskId", "expectedVersion", "toAssigneeId", "note", "artifactIds"] },
+      taskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 }, toAssigneeId: { type: "string", format: "uuid" }, note: { type: "string" },
+      currentProgress: { type: "string" }, completedWork: { type: "string" }, pendingWork: { type: "string" }, attentionPoints: { type: "string" },
+      artifactIds: { type: "array", items: { type: "string", format: "uuid" }, maxItems: 40 },
+    }, required: ["taskId", "expectedVersion", "toAssigneeId", "note", "currentProgress", "completedWork", "pendingWork", "artifactIds"] },
     inputSchema: initiateTaskHandoffSchema,
     preview(input) { const value = initiateTaskHandoffSchema.parse(input); return `发起任务 ${value.taskId} 的交接，冻结当前版本并交由 ${value.toAssigneeId} 签收。`; },
     execute(context, input, execution) { return service.initiateTaskHandoff(context, initiateTaskHandoffSchema.parse(input), { source: "agent", sourceRunId: execution?.agentRunId }); },
@@ -120,6 +126,26 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
     inputSchema: taskHandoffTrailSchema,
     preview(input) { const value = taskHandoffTrailSchema.parse(input); return `查询任务 ${value.taskId} 的完整交接链。`; },
     execute(context, input) { return service.taskHandoffTrail(context, taskHandoffTrailSchema.parse(input).taskId); },
+  });
+  registry.register({
+    id: "work.get_task_progress", skillId: "work-orchestration", version: 1,
+    description: "只读查询当前用户有权读取的任务进度事实卡：负责人、开始/截止时间、工期、状态、临期/逾期标记、全生命周期事件时间线和交接链。回答任务进度、剩余工期或卡在哪个环节前应优先使用本工具核验，不得猜测。",
+    requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { taskId: { type: "string", format: "uuid" } }, required: ["taskId"] },
+    inputSchema: taskFactSchema,
+    preview(input) { const value = taskFactSchema.parse(input); return `读取任务 ${value.taskId} 的进度事实卡。`; },
+    execute(context, input) { return service.taskProgressFact(context, taskFactSchema.parse(input).taskId); },
+  });
+  registry.register({
+    id: "work.get_member_workload", skillId: "work-orchestration", version: 1,
+    description: "只读查询当前租户成员负载：进行中任务数、7 天内到期任务数、容量点合计。定向分派任务给某位负责人之前应使用本工具核验负载，避免把任务压给过载成员。",
+    requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: {}, required: [] },
+    inputSchema: z.object({}).strict(),
+    preview() { return "读取成员负载视图。"; },
+    execute(context) { return service.memberWorkload(context); },
   });
   registry.register({
     id: "communication.publish_message", skillId: "company-communication", version: 1,

@@ -16,6 +16,7 @@ import {
   GitBranch,
   GitCommitHorizontal,
   Goal,
+  Kanban,
   Inbox,
   LayoutDashboard,
   Library,
@@ -48,6 +49,7 @@ import { EnterpriseGovernanceView } from "@/components/enterprise-governance-vie
 import { ManagementIntelligenceView } from "@/components/management-intelligence-view";
 import { PwaLifecycle } from "@/components/pwa-lifecycle";
 import { WorkCommandCenter } from "@/components/work-command-center";
+import { TaskProgressBoard } from "@/components/task-progress-board";
 import { PiCodingWorkbench } from "@/components/pi-coding-workbench";
 import { PiGovernanceConsole } from "@/components/pi-governance-console";
 import { PiOperationsConsole } from "@/components/pi-operations-console";
@@ -137,6 +139,7 @@ const primaryNav: NavItem[] = [
   { id: "management-intelligence", label: "经营中枢", icon: Network },
   { id: "inbox", label: "统一收件箱", icon: Inbox },
   { id: "projects", label: "项目与任务", icon: BriefcaseBusiness },
+  { id: "task-progress", label: "任务进度", icon: Kanban },
   { id: "approvals", label: "智能审批", icon: FileCheck2 },
   { id: "people", label: "组织与人才", icon: Users },
   { id: "goals", label: "目标与绩效", icon: Goal },
@@ -470,7 +473,7 @@ export function OfficeShell() {
             onConnect={() => chooseNav("integrations")}
           /> : active === "projects" ? (
             selectedProjectId && identity ? <ManagementLoopView projectId={selectedProjectId} actorId={identity.actorId} onNotice={showNotice} /> : <ProjectRequiredState onReturn={() => chooseNav("today")} />
-          ) : active === "integrations" ? <IntegrationCenterView onNotice={showNotice} />
+          ) : active === "task-progress" ? <TaskProgressBoard onNotice={showNotice} /> : active === "integrations" ? <IntegrationCenterView onNotice={showNotice} />
             : active === "client" ? <ClientPlatformView onNotice={showNotice} />
               : active === "management-intelligence" ? <ManagementIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} />
               : active === "enterprise-governance" ? <EnterpriseGovernanceView actorId={identity?.actorId ?? null} selectedProjectId={selectedProjectId} onNotice={showNotice} />

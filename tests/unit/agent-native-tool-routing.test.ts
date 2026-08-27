@@ -55,7 +55,7 @@ describe("LLM-native Skill and Tool routing", () => {
               acceptanceCriteria: "形成可签字的 PDF 验收包。",
               requiredSkills: ["交付"],
               assignmentMode: "open_claim",
-              priority: "high",
+startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7,               priority: "high",
               dueAt: "2030-08-16T10:00:00.000Z",
               capacityPoints: 3,
             }],
@@ -137,13 +137,13 @@ describe("LLM-native Skill and Tool routing", () => {
     const conversation = (await tasks.workspace(context)).conversation;
     const assigned = (await tasks.publishMission(context, {
       conversationId: conversation.id, title: "客户问题闭环", objective: "持续处理客户验收阶段遗留问题。", priority: "high", dueAt: "2030-08-18T10:00:00.000Z",
-      packages: [{ title: "复现客户问题", description: "整理复现步骤与日志。", acceptanceCriteria: "交付完整的问题复现材料。", requiredSkills: ["产品"], assignmentMode: "direct", assigneeId: DEMO_PRODUCT_OWNER_ID, priority: "high", dueAt: "2030-08-16T10:00:00.000Z", capacityPoints: 2 }],
+      packages: [{ title: "复现客户问题", description: "整理复现步骤与日志。", acceptanceCriteria: "交付完整的问题复现材料。", requiredSkills: ["产品"], startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7, assignmentMode: "direct", assigneeId: DEMO_PRODUCT_OWNER_ID, priority: "high", dueAt: "2030-08-16T10:00:00.000Z", capacityPoints: 2 }],
     })).packages[0];
     const tools = new ToolRegistry();
     registerManagementTools(tools, management);
     registerTaskCommandTools(tools, tasks);
     const model = new ScriptedModel([{ content: "", toolCalls: [{ id: "call-handoff-1", name: modelToolName("work.initiate_task_handoff"), arguments: {
-      taskId: assigned.id, expectedVersion: assigned.version, toAssigneeId: DEMO_DELIVERY_OWNER_ID, note: "客户问题已完成初步复现，请接续整理交付证据。", artifactRefs: ["document:reproduction-v1", "file:customer-log.zip"],
+      taskId: assigned.id, expectedVersion: assigned.version, toAssigneeId: DEMO_DELIVERY_OWNER_ID, note: "客户问题已完成初步复现，请接续整理交付证据。", currentProgress: "初步复现已完成，整理交付证据。", completedWork: "初步复现完成。", pendingWork: "交付证据整理。", artifactRefs: ["document:reproduction-v1", "file:customer-log.zip"],
     } }] }]);
     const orchestrator = new AgentOrchestrator(new InMemoryAgentStore(), new ManagementContextProvider(management, tasks), model, tools, createDefaultSkillRegistry(), tasks);
     const run = await orchestrator.createRun(context, { message: "把客户问题交给交付继续处理，复现资料已经在附件里。", conversationId: conversation.id, clientRequestId: "native-handoff-route-001" });
@@ -207,7 +207,7 @@ describe("LLM-native Skill and Tool routing", () => {
         description: "读取当前任务交接链。",
         acceptanceCriteria: "返回可核验的交接链结果。",
         requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_PRODUCT_OWNER_ID,
-        priority: "medium", dueAt: "2030-08-19T10:00:00.000Z", capacityPoints: 1,
+        startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7, priority: "medium", dueAt: "2030-08-19T10:00:00.000Z", capacityPoints: 1,
       }],
     })).packages[0];
     const tools = new ToolRegistry();

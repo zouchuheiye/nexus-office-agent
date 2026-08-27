@@ -6,12 +6,12 @@ import { createPostgresDatabase } from "@/src/platform/database/postgres";
 const runtime = globalThis as typeof globalThis & { __nexusTaskCommandService?: TaskCommandService; __nexusTaskCommandRuntimeVersion?: number };
 
 export function getTaskCommandService() {
-  if (runtime.__nexusTaskCommandRuntimeVersion !== 4) {
+  if (runtime.__nexusTaskCommandRuntimeVersion !== 5) {
     const repository = process.env.DATABASE_URL
       ? new PostgresTaskCommandRepository(createPostgresDatabase(process.env.DATABASE_URL))
       : getDevelopmentTaskCommandRepository();
     runtime.__nexusTaskCommandService = new TaskCommandService(repository);
-    runtime.__nexusTaskCommandRuntimeVersion = 4;
+    runtime.__nexusTaskCommandRuntimeVersion = 5;
   }
   return runtime.__nexusTaskCommandService!;
 }

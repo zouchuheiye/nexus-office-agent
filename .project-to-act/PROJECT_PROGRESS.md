@@ -224,3 +224,22 @@
 - 2026-08-05：完成 M1 平台地基；`0.2.0-foundation` 包含模块化领域结构、PostgreSQL Schema/RLS、权限策略、审计脱敏、Outbox/Inbox、Fake Model/Connector 和安全运行状态 API。19 项测试、类型、Lint、生产构建全部通过。证据 E-008。下一步进入 M2。
 - 2026-08-05：完成 M0 设计基线；11 个 Markdown 文档、1482 行、73 个定义需求，无空文档、重复定义和失效本地链接。飞书、钉钉、企业微信设计依据已按官方文档核对。证据 E-006、E-007。下一步进入 M1。
 - 2026-08-05：完成 0.1.0 可交互原型；保留为视觉概念验证，不视为生产领域实现。证据 E-001 至 E-005。
+
+- 2026-08-27：启动“任务进度落地”第一批（D-041 / F-077～F-080）。需求与方案已写入本台账：F-077 必填门禁+工期（新增 started_at/estimated_days）、F-078 时间线（复用 work_task_events）、F-079 临期/逾期（读时计算+分组）、F-080 AI 只读事实卡（只读工具）。本机仍为内存仓储（未接 PostgreSQL），持久化与后台提醒依赖后续数据库接入；代码改动不提交远端。证据待 E-064。
+
+
+- 2026-08-27：任务进度落地第一批（D-041 / F-077～F-080）本地工程完成，证据 E-064。typecheck 通过；新增与既有任务测试全绿（全量 452 通过 / 6 失败为 firecracker 沙箱环境 EPERM / 26 跳过）；API 冒烟：缺 startedAt/estimatedDays 发布返回 422，带字段发布 201，GET packages/:id/timeline 200。补建基线缺失的 artifacts 路由。剩余：真实 PostgreSQL 持久化、后台到期提醒 Worker、看板/报表/交接单（F-081～F-086 已规划）。
+
+
+- 2026-08-27：启动第二批（D-042 / F-081～F-082）。F-081 标准交接单：新增结构化字段与迁移；F-082 看板：board 只读接口 + 模块页。证据待 E-065。
+
+
+- 2026-08-27：第二批（D-042 / F-081～F-082）本地工程完成，证据 E-065。F-081 结构化交接单（当前进度/已完成/未完成/注意事项）+ 0046 迁移 + 前端展示；F-082 看板 board 接口 + 模块页 + 导航。修复 task-command runtime 版本守卫 4→5。剩余：真实 PostgreSQL 持久化、后台到期提醒、F-083～F-086 规划项。
+
+- 2026-08-27：本地持久化基础设施落地（证据 E-102）。安装 PostgreSQL 16.6 绿色便携版至 D:\pgsql16（无 Windows 服务，pg_ctl 管理）：补齐系统缺失的 VC++ 运行库 DLL、initdb 初始化（UTF8 / scram-sha-256 / 超级用户 postgres）、启动 127.0.0.1:5432、建库 nexus、在 .env.local 写入 DATABASE_URL（已 git 忽略，不提交）、全量 0001～0046 迁移应用、导入演示租户/部门/人员/职位种子数据；重启开发服务器后 task-command 已切换 PostgresTaskCommandRepository，API 发布任务可落库查询。旧内存演示任务随重启清空属预期。启动/停止脚本：D:\pgsql16\start-postgres.ps1 / stop-postgres.ps1。剩余：后台到期提醒、F-083～F-086。
+
+- 2026-08-27：持久化验证通过（补充 E-102）。重启开发服务器后：2 条聊天消息、1 个任务包均从 PostgreSQL 读回（workspace 的 availableTasks/publishedByMe、board 的 tasks 均可见）；人员/部门种子数据正常。稳定性修复：PostgreSQL 与开发服务器均改为 Start-Process 独立后台进程（不再挂靠 exec 会话，避免会话结束被带崩）；PostgreSQL 加入登录自启（Startup 目录 nexus-postgres.vbs）；脚本位于 D:\pgsql16\start-postgres.ps1 / stop-postgres.ps1 / start-dev.ps1。
+
+- 2026-08-27：启动第三批（D-043）：后台到期提醒 + F-083～F-086。需求与方案已写入台账（见 D-043）。本批依赖真实 PostgreSQL（已就绪，E-102）。证据待 E-103。
+
+- 2026-08-27：第三批（D-043 / F-083～F-086 + 后台到期提醒）本地工程完成，证据 E-103。实现：到期提醒+阻塞升级扫描（collectTaskReminderCandidates 纯函数 + service.runReminderScan + scripts/task-reminder.ts --once/--watch，消息用确定性 UUID 幂等去重，阻塞任务走升级通道避免重复提醒）；F-084 成员负载（WorkPerson 扩展 inProgressTaskCount/dueSoonTaskCount/capacityPoints，Postgres/InMemory listPeople 统计，定向分派负载过高返回 warnings，新增只读工具 work.get_member_workload，看板人员负载条）；F-086 报表导出（service.exportReport + GET /api/v1/task-command/reports/export CSV/JSON，看板导出按钮）；F-083 周期摘要（service.generatePeriodicSummary + scripts/task-summary.ts）。验证：typecheck 0 错误；新增单元测试 6/6 + 相关套件 28/28 通过；真实 Postgres 冒烟——负载字段正确、提醒扫描 created=3→再扫 dedup=3→拨快5天 overdue=3、公司池可见 7 条提醒/摘要、CSV 导出带表头、JSON 按人过滤正确。遗留：postgres 集成测试 PGlite/WASM 在当前 Node24 环境 worker 崩溃（既有环境问题，git HEAD 同样崩溃）；blocked 升级用纯函数单测覆盖。

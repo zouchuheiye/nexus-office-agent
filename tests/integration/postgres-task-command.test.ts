@@ -52,7 +52,7 @@ describe("Postgres task command repository", () => {
         acceptanceCriteria: "证据完整且可追溯。",
         requiredSkills: ["测试"],
         assignmentMode: "open_claim",
-        priority: "high",
+startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7,         priority: "high",
         dueAt: "2030-08-30T10:00:00.000Z",
         capacityPoints: 3,
       }],
@@ -87,14 +87,14 @@ describe("Postgres task command repository", () => {
     const conversation = (await service.workspace(publisher)).conversation;
     const task = (await service.publishMission(publisher, {
       conversationId: conversation.id, title: "持久化交接", objective: "验证任务交接在同一事务中保存责任与资料快照。", priority: "high", dueAt: "2030-09-01T10:00:00.000Z",
-      packages: [{ title: "交接验收资料", description: "由接收人继续完成资料复核。", acceptanceCriteria: "资料、责任和交接链完整可查。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_MANAGER_ID, priority: "high", dueAt: "2030-08-30T10:00:00.000Z", capacityPoints: 2 }],
+      packages: [{ title: "交接验收资料", description: "由接收人继续完成资料复核。", acceptanceCriteria: "资料、责任和交接链完整可查。", requiredSkills: ["交付"], startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7, assignmentMode: "direct", assigneeId: DEMO_MANAGER_ID, priority: "high", dueAt: "2030-08-30T10:00:00.000Z", capacityPoints: 2 }],
     })).packages[0];
     const registered = await service.registerTaskArtifact(publisher, {
       title: "验收资料包", fileName: "acceptance-v1.zip", mediaType: "application/zip",
       contentDigest: "a".repeat(64), storageRef: "object://controlled/acceptance-v1.zip", classification: "internal",
     });
     const requested = await service.initiateTaskHandoff(publisher, {
-      taskId: task.id, expectedVersion: 1, toAssigneeId: MEMBER_ID, note: "资料已归档，请接续进行产品验收复核。", artifactIds: [registered.artifact.id],
+      taskId: task.id, expectedVersion: 1, toAssigneeId: MEMBER_ID, note: "资料已归档，请接续进行产品验收复核。", currentProgress: "资料已归档，进入产品验收复核。", completedWork: "资料归档完成。", pendingWork: "产品验收复核与签字。", artifactIds: [registered.artifact.id],
     });
     const recipient = { ...createDevelopmentRequestContext("postgres-task-handoff-recipient"), actorId: MEMBER_ID };
     const accepted = await service.respondToTaskHandoff(recipient, requested.handoff.id, { expectedVersion: 1, decision: "accept" });
@@ -106,5 +106,24 @@ describe("Postgres task command repository", () => {
     expect((await service.taskHandoffTrail(publisher, task.id)).handoffs).toEqual([expect.objectContaining({ id: requested.handoff.id, status: "accepted" })]);
     const audits = await database.query<{ resource_type: string }>("SELECT resource_type FROM audit_events WHERE resource_type IN ('work_task_handoffs','work_packages','work_task_events')");
     expect(audits.rows.map(({ resource_type }) => resource_type)).toEqual(expect.arrayContaining(["work_task_handoffs", "work_packages", "work_task_events"]));
+  });
+
+  it("F-084: postgres listPeople exposes workload counts and capacity points", async () => {
+    const publisher = createDevelopmentRequestContext("postgres-workload");
+    const conversation = (await service.workspace(publisher)).conversation;
+    await service.publishMission(publisher, {
+      conversationId: conversation.id,
+      title: "负载验证",
+      objective: "验证负载统计。",
+      priority: "medium",
+      dueAt: "2030-08-30T10:00:00.000Z",
+      packages: [{ title: "负载包", description: "负载。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_MANAGER_ID, priority: "medium", dueAt: "2030-08-30T10:00:00.000Z", startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7, capacityPoints: 4 }],
+    });
+    const people = await service.memberWorkload(publisher);
+    const me = people.find((person) => person.id === DEMO_MANAGER_ID);
+    expect(me?.activeTaskCount).toBe(1);
+    expect(me?.inProgressTaskCount).toBe(1);
+    expect(me?.capacityPoints).toBe(4);
+    expect(me?.dueSoonTaskCount).toBe(0);
   });
 });

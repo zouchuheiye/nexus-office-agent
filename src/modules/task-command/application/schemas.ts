@@ -22,8 +22,11 @@ export const publishMissionSchema = z.object({
     targetOrgUnitId: z.uuid().optional(),
     priority,
     dueAt: isoDateTime,
+    startedAt: isoDateTime,
+    estimatedDays: z.number().int().min(1).max(365),
     capacityPoints: z.number().int().min(1).max(40).default(1),
   }).strict().superRefine((value, context) => {
+    if (new Date(value.startedAt).getTime() >= new Date(value.dueAt).getTime()) context.addIssue({ code: "custom", path: ["startedAt"], message: "开始时间必须早于截止时间。" });
     if (value.assignmentMode === "direct" && !value.assigneeId) context.addIssue({ code: "custom", path: ["assigneeId"], message: "定向分派必须指定负责人。" });
     if (value.assignmentMode === "direct" && value.targetOrgUnitId) context.addIssue({ code: "custom", path: ["targetOrgUnitId"], message: "定向个人任务不能同时指定部门。" });
     if (value.assignmentMode === "open_claim" && value.assigneeId) context.addIssue({ code: "custom", path: ["assigneeId"], message: "公开承接任务不能预设负责人。" });
@@ -42,6 +45,8 @@ export const createTaskTemplateSchema = z.object({
   targetOrgUnitId: z.uuid().optional(),
   priority: priority.optional(),
   dueAt: isoDateTime.optional(),
+  startedAt: isoDateTime.optional(),
+  estimatedDays: z.number().int().min(1).max(365).optional(),
   capacityPoints: z.number().int().min(1).max(40).optional(),
 }).strict();
 
@@ -58,6 +63,8 @@ export const updateTaskTemplateSchema = z.object({
   targetOrgUnitId: z.uuid().nullable().optional(),
   priority: priority.optional(),
   dueAt: isoDateTime.optional(),
+  startedAt: isoDateTime.optional(),
+  estimatedDays: z.number().int().min(1).max(365).optional(),
   capacityPoints: z.number().int().min(1).max(40).optional(),
 }).strict();
 
@@ -75,6 +82,10 @@ export const initiateTaskHandoffSchema = z.object({
   expectedVersion: z.number().int().positive(),
   toAssigneeId: z.uuid(),
   note: z.string().trim().min(4).max(1_200),
+  currentProgress: z.string().trim().min(2).max(1_200),
+  completedWork: z.string().trim().min(2).max(1_200),
+  pendingWork: z.string().trim().min(2).max(1_200),
+  attentionPoints: z.string().trim().max(800).optional(),
   artifactIds: z.array(z.uuid()).max(40).default([]),
   /** @deprecated Only accepted while older clients move to versioned artifacts. */
   artifactRefs: z.array(z.string().trim().min(2).max(240)).max(40).default([]),
@@ -128,3 +139,27 @@ export type AppendTaskArtifactVersionInput = z.infer<typeof appendTaskArtifactVe
 export type RespondToTaskHandoffInput = z.infer<typeof respondToTaskHandoffSchema>;
 export type PublishPoolMessageInput = z.infer<typeof publishPoolMessageSchema>;
 export type AppendPoolFeedbackInput = z.infer<typeof appendPoolFeedbackSchema>;
+
+export const exportReportSchema = z.object({
+  groupBy: z.enum(["person", "project", "period"]).optional(),
+  format: z.enum(["csv", "json"]).optional(),
+  assigneeId: z.uuid().optional(),
+  missionId: z.uuid().optional(),
+  from: isoDateTime.optional(),
+  to: isoDateTime.optional(),
+}).strict();
+
+export const runReminderScanSchema = z.object({
+  now: isoDateTime.optional(),
+  dueSoonHours: z.number().int().min(1).max(24 * 14).optional(),
+  blockedEscalationHours: z.number().int().min(1).max(24 * 90).optional(),
+}).strict();
+
+export const generatePeriodicSummarySchema = z.object({
+  scope: z.enum(["daily", "weekly"]).optional(),
+  now: isoDateTime.optional(),
+}).strict();
+
+export type ExportReportInput = z.infer<typeof exportReportSchema>;
+export type RunReminderScanInput = z.infer<typeof runReminderScanSchema>;
+export type GeneratePeriodicSummaryInput = z.infer<typeof generatePeriodicSummarySchema>;

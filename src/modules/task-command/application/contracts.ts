@@ -14,6 +14,7 @@ export interface TaskCommandRepository {
   claimPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number }): Promise<boolean>;
   transitionPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number }): Promise<boolean>;
   listEvents(tenantId: string, actorId: string, after: number, limit: number): Promise<WorkTaskEvent[]>;
+  listPackageEvents(tenantId: string, packageId: string): Promise<WorkTaskEvent[]>;
   listHandoffs(tenantId: string, packageIds: string[]): Promise<WorkTaskHandoff[]>;
   getHandoff(tenantId: string, id: string): Promise<WorkTaskHandoff | null>;
   createArtifact(artifact: WorkArtifact, initialVersion: WorkArtifactVersion): Promise<WorkArtifact>;
