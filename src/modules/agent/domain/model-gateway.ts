@@ -63,10 +63,25 @@ export class OpenAICompatibleModelGateway implements ModelGateway {
     private readonly baseUrl: string,
     private readonly model: string,
     private readonly timeoutMs = 30_000,
+    private readonly maxAttempts = 3,
   ) {}
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
     if (request.dataClassification === "restricted") throw new Error("MODEL_POLICY_DENIED");
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      try {
+        return await this.completeOnce(request);
+      } catch (error) {
+        lastError = error;
+        if (!isTransientModelError(error) || attempt === this.maxAttempts) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** (attempt - 1)));
+      }
+    }
+    throw lastError;
+  }
+
+  private async completeOnce(request: ModelRequest): Promise<ModelResponse> {
     const startedAt = Date.now();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -113,11 +128,21 @@ export class OpenAICompatibleModelGateway implements ModelGateway {
       };
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") throw new Error("MODEL_TIMEOUT");
+      if (error instanceof TypeError) throw new Error("MODEL_PROVIDER_UNAVAILABLE");
       throw error;
     } finally {
       clearTimeout(timeout);
     }
   }
+}
+
+function isTransientModelError(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  if (error instanceof Error && error.message.startsWith("MODEL_PROVIDER_ERROR:")) {
+    const status = Number(error.message.slice("MODEL_PROVIDER_ERROR:".length));
+    return status === 429 || (status >= 500 && status <= 599);
+  }
+  return false;
 }
 
 export class UnavailableModelGateway implements ModelGateway {

@@ -27,6 +27,7 @@
     "test:performance": "vitest run tests/performance",
     "test:watch": "vitest",
     "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed:development": "tsx scripts/seed-development-data.ts",
     "ops:backup": "tsx scripts/backup.ts",
     "ops:restore": "tsx scripts/restore.ts",
     "ops:smoke": "tsx scripts/http-performance-smoke.ts",

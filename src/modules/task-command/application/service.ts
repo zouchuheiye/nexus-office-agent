@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { RequestContext } from "@/src/platform/context/request-context";
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
 import type { AppendPoolFeedbackInput, AppendTaskArtifactVersionInput, CreateTaskTemplateInput, ExportReportInput, GeneratePeriodicSummaryInput, InitiateTaskHandoffInput, PublishMissionInput, PublishPoolMessageInput, RegisterTaskArtifactInput, RespondToTaskHandoffInput, RunReminderScanInput, TransitionPackageInput, UpdateTaskTemplateInput } from "@/src/modules/task-command/application/schemas";
-import { claimWorkPackage, collectTaskReminderCandidates, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, deterministicUuid, dueStateOf, handoffWorkPackage, respondToTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkTaskEvent, type WorkTaskHandoff, type WorkTaskHandoffArtifactSnapshot, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
+import { claimWorkPackage, collectTaskReminderCandidates, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, deterministicUuid, dueStateOf, handoffWorkPackage, respondToTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
 
 function hasPermission(context: RequestContext, permission: string): boolean {
   const [resource, action] = permission.split(":");
@@ -533,17 +533,18 @@ export class TaskCommandService {
   /** F-082: read-only board of all visible tasks with due state. */
   async board(context: RequestContext) {
     requirePermission(context, "work_task:read");
-    const [workspace, people, orgUnits] = await Promise.all([
+    const [workspace, people, orgUnits, missions] = await Promise.all([
       this.workspace(context),
       this.repository.listPeople(context.tenantId),
       this.repository.listOrgUnits(context.tenantId),
+      this.repository.listMissions(context.tenantId),
     ]);
     const byId = new Map<string, WorkPackageWithDue>();
     for (const list of [workspace.myTasks, workspace.availableTasks, workspace.publishedByMe, workspace.handoffTasks]) {
       for (const item of list) if (!byId.has(item.id)) byId.set(item.id, item);
     }
     const tasks = [...byId.values()].filter((item) => !item.isTemplate);
-    return { tasks, people, orgUnits, actorId: context.actorId, generatedAt: new Date().toISOString() };
+    return { tasks, people, orgUnits, missions: missions.filter((mission) => !mission.isTemplate && tasks.some((task) => task.missionId === mission.id)), actorId: context.actorId, generatedAt: new Date().toISOString() };
   }
 
   /** F-084: 成员负载只读视图（供 Agent 定向分派前查询）。 */

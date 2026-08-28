@@ -90,6 +90,7 @@
 | F-084 | 成员负载视图 | P2 | 已完成（本地工程范围） | F-077 | 每人显示 进行中任务数+7天内到期数+容量点；定向分派时提示负载过高 | E-103 |
 | F-085 | 阻塞升级提醒 | P2 | 已完成（本地工程范围） | F-079 | 任务阻塞超过可配置阈值自动通知发布人与上级 | E-103 |
 | F-086 | 进度报表导出 | P2 | 已完成（本地工程范围） | F-083 | 按人/项目/时段导出任务进度表（CSV/Excel） | E-103 |
+| F-087 | 人员 × 项目多视图与拖拽分配提案 | P2 | 已完成（本地工程范围） | F-077、F-084 | 以“矩阵 / 项目泳道 / 人员泳道”三种视图实时展示人员—项目关系与任务进度；矩阵冻结首行首列、支持双向滚动；人员池拖拽人员到项目（或拖矩阵行头到项目列）生成“加入项目并分配任务”的 Agent 提案，经确认后才落库；关系由 task-command board 的 mission.projectId + assigneeId 推导 | E-104 |
 ## Pi 模块与函数级实现契约
 
 | 模块 ID | 对应功能 | 实现边界 | 主要接口/类 | 必须实现的函数与语义 | 持久化/事件 | 安全与失败策略 | Gate |
@@ -454,3 +455,5 @@
 
 
 - 2026-08-27：F-081～F-082 完成本地工程范围，形成 E-065。F-081：交接单新增 当前进度/已完成/未完成/注意事项 结构化字段（0046 迁移 work_task_handoffs 四列；schema/领域/service/PG 仓库/前端交接链展示/Agent 工具参数全部打通）。F-082：新增只读 GET /api/v1/task-command/board（全部可见任务+dueState+actorId）与“任务进度”模块页（按 待承接/进行中/待验收/已完成/已取消 分列，逾期/临期高亮，剩余天数，全部/我负责/我发布 过滤）。修复 dev 运行时单例版本守卫（runtime version 4→5），board 方法才在运行中进程生效。typecheck 0 错误；任务相关测试 22 项通过；全量 415 通过/26 跳过/4 失败均为 firecracker 沙箱 Windows C:\ 写权限 EPERM（预存环境问题）。
+
+- 2026-08-28：新增 F-087“人员 × 项目多视图与拖拽分配提案”，并修复离线后模型连接无法恢复的问题，形成 E-104。人员 × 项目模块由空白占位重写为矩阵/项目泳道/人员泳道三种视图，复用 `/api/v1/task-command/board` 的 mission.projectId + assigneeId 推导关系与实时进度；拖拽通过 `onAsk` 生成 Agent 提案而非直接落库。模型网关对瞬时网络故障（TypeError/fetch failed/429/5xx）按指数退避重试并归一为 MODEL_* 可降级错误；编排器将网络类错误纳入可降级模型故障。同时把内存演示项目/目标/里程碑/任务/风险写入 PostgreSQL 种子脚本并把现有 mission 关联到演示项目。验证：`npm run typecheck` exit 0、`npm run lint` exit 0（0 errors/0 warnings）、`npx vitest run tests/unit/model-gateway-retry.test.ts tests/unit/agent-orchestrator.test.ts tests/unit/fake-model.test.ts` 14/14 通过；真实 PostgreSQL 冒烟 board 返回带 projectId 的 missions、bootstrap 返回项目。遗留：拖拽仅生成提案、未接确认写入；真实企业 Gate 不变。

@@ -40,7 +40,7 @@ function daysLeft(task: Task): string {
   return diff < 0 ? `逾期 ${-diff} 天` : diff === 0 ? "今天到期" : `剩 ${diff} 天`;
 }
 
-export function TaskProgressBoard({ onNotice }: { onNotice: (message: string) => void }) {
+export function TaskProgressBoard() {
   const [board, setBoard] = useState<Board | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -59,7 +59,10 @@ export function TaskProgressBoard({ onNotice }: { onNotice: (message: string) =>
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
   useEffect(() => { const timer = window.setInterval(() => void load(), 30_000); return () => window.clearInterval(timer); }, [load]);
 
   const peopleById = useMemo(() => new Map(board?.people.map((person) => [person.id, person]) ?? []), [board]);

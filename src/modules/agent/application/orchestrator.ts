@@ -38,8 +38,9 @@ function hasPermission(context: RequestContext, required: string): boolean {
 }
 
 function isModelFailure(error: unknown) {
+  if (error instanceof TypeError) return true;
   const code = error instanceof Error ? error.message : "";
-  return code.startsWith("MODEL_") || code.startsWith("AGENT_TOOL_LOOP_LIMIT");
+  return code.startsWith("MODEL_") || code.startsWith("AGENT_TOOL_LOOP_LIMIT") || code === "fetch failed";
 }
 
 const finalAnswerSchema = z.object({
