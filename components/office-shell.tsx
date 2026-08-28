@@ -36,6 +36,7 @@ import {
   Sparkles,
   Smartphone,
   Users,
+  UserRound,
   WandSparkles,
   X,
 } from "lucide-react";
@@ -51,6 +52,7 @@ import { PwaLifecycle } from "@/components/pwa-lifecycle";
 import { WorkCommandCenter } from "@/components/work-command-center";
 import { TaskProgressBoard } from "@/components/task-progress-board";
 import { ProjectPeopleMap } from "@/components/project-people-map";
+import { EmployeeProfile } from "@/components/employee-profile";
 import { PiCodingWorkbench } from "@/components/pi-coding-workbench";
 import { PiGovernanceConsole } from "@/components/pi-governance-console";
 import { PiOperationsConsole } from "@/components/pi-operations-console";
@@ -132,6 +134,7 @@ type PrimaryConversationWorkspace = {
 
 const primaryNav: NavItem[] = [
   { id: "project-people", label: "人员 × 项目", icon: Network },
+  { id: "employee-profile", label: "员工画像", icon: UserRound },
   { id: "command", label: "工作对话", icon: MessageSquareText },
   { id: "coding", label: "开发工作台", icon: Code2 },
   { id: "agent-development", label: "Agent 开发", icon: GitCommitHorizontal },
@@ -413,7 +416,7 @@ export function OfficeShell() {
 
   const identity = bootstrap?.identity;
   return (
-    <div className={`app-shell ${active === "project-people" ? "project-people-mode" : ""} ${active === "command" ? "command-mode" : ""} ${active === "coding" ? "coding-mode" : ""} ${active === "agent-development" ? "development-mode" : ""} ${active !== "project-people" && active !== "command" && active !== "coding" && active !== "agent-development" && agentOpen ? "with-agent" : ""}`}>
+    <div className={`app-shell ${active === "project-people" ? "project-people-mode" : ""} ${active === "employee-profile" ? "employee-profile-mode" : ""} ${active === "command" ? "command-mode" : ""} ${active === "coding" ? "coding-mode" : ""} ${active === "agent-development" ? "development-mode" : ""} ${active !== "project-people" && active !== "employee-profile" && active !== "command" && active !== "coding" && active !== "agent-development" && agentOpen ? "with-agent" : ""}`}>
       <PwaLifecycle />
       {mobileNav ? <button className="scrim" aria-label="关闭导航" onClick={() => setMobileNav(false)} /> : null}
       <aside className={`sidebar ${mobileNav ? "sidebar-open" : ""}`}>
@@ -447,7 +450,7 @@ export function OfficeShell() {
         </header>
 
         <section className="content-canvas">
-          {active === "project-people" ? <ProjectPeopleMap projects={bootstrap?.projects ?? []} projectsLoading={bootstrapLoading} onOpenProject={(projectId) => { setSelectedProjectId(projectId); chooseNav("projects"); }} onAsk={(text) => { chooseNav("command"); setQuery(text); }} /> : active === "command" ? <>
+          {active === "project-people" ? <ProjectPeopleMap projects={bootstrap?.projects ?? []} projectsLoading={bootstrapLoading} onOpenProject={(projectId) => { setSelectedProjectId(projectId); chooseNav("projects"); }} onAsk={(text) => { chooseNav("command"); setQuery(text); }} /> : active === "employee-profile" ? <EmployeeProfile onAsk={(text) => { chooseNav("command"); setQuery(text); }} /> : active === "command" ? <>
             {bootstrap?.dataMode === "development_fixture" ? <div className="fixture-banner"><ShieldAlert size={14} /><span><strong>本地验证模式</strong> 对话与任务记录来自开发工作区，不代表真实企业。</span></div> : null}
             <WorkCommandCenter
               messages={messages}

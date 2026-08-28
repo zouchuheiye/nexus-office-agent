@@ -2,6 +2,7 @@
 
 ## 当前验收结论
 
+- E-105 员工画像（本地工程范围）：新增 F-088，从 task-command board 的 `requiredSkills` 派生员工技能画像，汇总在手/进行中/临期/容量点/参与项目，列出当前任务，并基于技能重合与开放任务生成“任务匹配建议”，一键触发 Agent 分派提案（onAsk）。验证方法：`npm run typecheck`（exit 0）、`npm run lint`（exit 0，0 errors/0 warnings）、真实 `/api/v1/task-command/board` 返回 `requiredSkills`、`/?view=employee-profile` 渲染成功。代码版本：本批未提交增量（提交 SHA 见 PR）。结论：通过（本地工程范围）。遗留：演示数据暂无未分派开放任务，建议区为空态；分派仍走 Agent 提案未接确认写入；真实企业 Gate 不变。
 - E-104 人员 × 项目多视图与离线连接恢复（本地工程范围）：新增 F-087，人员 × 项目模块以矩阵/项目泳道/人员泳道三种视图实时展示人员—项目关系与进度，人员池/矩阵行头拖拽到项目生成 Agent 提案（onAsk），不直接落库；模型网关对瞬时网络故障重试并归一为 MODEL_* 可降级错误，编排器不再把离线 fetch failed 记为 500 硬错误；新增 seed 脚本将演示项目/目标/里程碑/任务/风险写入 PostgreSQL 并把已有 mission 关联到项目。验证方法：`npm run typecheck`（exit 0）、`npm run lint`（exit 0，0 errors/0 warnings）、`npx vitest run tests/unit/model-gateway-retry.test.ts tests/unit/agent-orchestrator.test.ts tests/unit/fake-model.test.ts`（14/14 passed）、真实 PostgreSQL 冒烟（board 返回带 projectId 的 missions、bootstrap 返回项目）。代码版本：HEAD `407097e`（本批为未提交增量，提交 SHA 见 PR）。结论：通过（本地工程范围）。遗留：拖拽仅生成提案未接确认写入；firecracker 沙箱 Windows EPERM 为预存环境问题；真实企业 Gate 不变。
 - E-102 公开仓库交付验收：提交 `da7dbf3` 已推送到 `https://github.com/redmaplewww/nexus-office-agent` 的 `main`；远端最新提交与本地一致，公开树包含完整 `.project-to-act`。提交范围包含当前 Agent 开发模块、对话记忆修复、测试和文档；`test-artifacts/` 本地生成物保持未跟踪且未公开。提交前 `git diff --cached --check`、敏感模式检查、`project-to-act --check/--validate` 均通过；该证据只证明源码公开交付，不证明生产环境、真实企业渠道或未通过的 G-027～G-038。
 - E-101 AgentOps 推荐增量验收：M35 测试阶段已新增 `agentops-awesome-list`，服务端快照、工作台与说明文档统一呈现；文案明确其只读健康检查边界，不修改项目、不授予权限、不替代 `aawo-agent-tester` 功能测试或 G-039 交付门禁。该增量不扩张既有本地工程验收范围。
