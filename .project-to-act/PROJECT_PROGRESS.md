@@ -263,3 +263,7 @@
 - 2026-09-01：按用户要求移除“员工画像”（F-088）：删除导航、viewRenderers 注册、组件 `components/employee-profile.tsx` 与 `.ep-*` 样式，核心明确收敛为“项目管理”；工作对话仍保留任务/沟通能力，形成 E-111。验证：typecheck/lint 0、页面不再包含员工画像入口。
 
 - 2026-09-01：按用户要求将“公告中心”改为“我的任务”（F-090）：移除公告中心页面/导航/样式，新增个人任务页（只看分配给自己的任务，按状态分组，支持开始/解除阻塞/提交验收/完成/交接和“让 Agent 整理”）；消息池 `kind` 字段与右侧消息栏保留，形成 E-112。验证：typecheck/lint 0、导航与页面切换正常。
+
+- 2026-09-02：按用户要求移除“我的任务”（F-090）与“项目管理”（F-087）导航入口与页面组件，任务闭环收敛到工作对话任务侧栏（我的/可承接/已发布/待交接）与任务进度页；连同此前未提交产品改动与 runtime 清理一起提交（commit `ba64439`），形成 E-113。验证：typecheck 0。被移除组件可自 git 历史找回。
+
+- 2026-09-02：任务执行链路缺陷修复与本地授权补齐，形成 E-114。1) Worker 运行时上下文未接 taskCommand，导致含任务包的提案版本校验误报 `PROPOSAL_OBJECT_VERSION_CONFLICT`（`src/platform/workers/runtime.ts` 补齐 taskCommand）；2) 提案确认对无 projectId 的交接/签收类提案强制重建项目上下文而抛 `INTERNAL_ERROR`（`src/modules/agent/application/orchestrator.ts` 改为有 projectId 才做版本校验，与 Worker 语义一致）；3) 本地真实 PostgreSQL 补齐 RBAC 种子（enterprise_manager/employee 角色、权限映射与 user_roles），使 Worker 按数据库授权执行不再 `TOOL_PERMISSION_DENIED`。真实 PostgreSQL 端到端验证：direct 与 open_claim 发布→提案确认→Worker 执行 succeeded→成员承接→发起交接→签收 accepted 全链路通过，事件链 package_published/claimed/handoff_initiated/handoff_accepted 完整，typecheck 0。说明：本地演示需运行独立 Worker 进程并配置角色权限，否则会复现“确认后不执行 / 权限拒绝”；本机 tsx 因 `os.userInfo` ENOMEM 需以 NODE_OPTIONS 预加载补丁启动。
