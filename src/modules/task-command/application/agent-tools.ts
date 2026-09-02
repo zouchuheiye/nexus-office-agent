@@ -149,11 +149,11 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
   });
   registry.register({
     id: "communication.publish_message", skillId: "company-communication", version: 1,
-    description: "将沟通、同步、征询或反馈整理后放入当前用户可见的公司或部门消息池。它不是任务：不产生负责人、截止时间、验收、任务状态或确认门禁。",
+    description: "将沟通、同步、征询或反馈整理后放入当前用户可见的公司或部门消息池。它不是任务：不产生负责人、截止时间、验收、任务状态或确认门禁。kind=announcement 用于公告/置顶，kind=notice 用于普通通知或提醒。",
     requiredPermissions: ["message_pool:publish"], riskLevel: 1, confirmationPolicy: "never", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 2,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
     inputJsonSchema: { type: "object", additionalProperties: false, properties: {
-      poolKey: { type: "string", description: "只能使用上下文中可见消息池的 key；company 为全公司，部门使用对应的 orgUnit UUID。" }, subject: { type: "string" }, content: { type: "string" },
+      poolKey: { type: "string", description: "只能使用上下文中可见消息池的 key；company 为全公司，部门使用对应的 orgUnit UUID。" }, subject: { type: "string" }, content: { type: "string" }, kind: { type: "string", enum: ["announcement", "notice"], description: "公告或通知，缺省为 notice" },
     }, required: ["poolKey", "subject", "content"] },
     inputSchema: publishPoolMessageSchema,
     preview(input) { const value = publishPoolMessageSchema.parse(input); return `将沟通“${value.subject}”发送至消息池 ${value.poolKey}。`; },

@@ -7,11 +7,7 @@ import { PostgresManagementIntelligenceRepository } from "@/src/modules/manageme
 import { createRuntimeManagementWecomGateway } from "@/src/modules/management-intelligence/infrastructure/wecom-gateway";
 import type { TransactionalDatabase } from "@/src/platform/database/executor";
 import { createPostgresDatabase } from "@/src/platform/database/postgres";
-
-const runtime = globalThis as typeof globalThis & {
-  __nexusManagementIntelligenceService?: ManagementIntelligenceService;
-  __nexusManagementIntelligenceServiceVersion?: number;
-};
+import { moduleRuntime } from "@/src/platform/runtime/module-runtime";
 
 function appBaseUrl() {
   return process.env.NEXUS_PUBLIC_APP_URL || process.env.PUBLIC_APP_ORIGIN || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
@@ -38,9 +34,5 @@ export function createManagementIntelligenceService(database?: TransactionalData
 }
 
 export function getManagementIntelligenceService(): ManagementIntelligenceService {
-  if (runtime.__nexusManagementIntelligenceServiceVersion !== 1) {
-    runtime.__nexusManagementIntelligenceService = createManagementIntelligenceService();
-    runtime.__nexusManagementIntelligenceServiceVersion = 1;
-  }
-  return runtime.__nexusManagementIntelligenceService!;
+  return moduleRuntime("management-intelligence", Symbol("management-intelligence"), () => createManagementIntelligenceService());
 }

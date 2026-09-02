@@ -432,6 +432,7 @@ export class TaskCommandService {
       orgUnitId: pool.orgUnitId,
       subject: input.subject,
       content: input.content,
+      kind: input.kind ?? "notice",
       authorId: context.actorId,
       source: execution?.source ?? "human",
       sourceRunId: execution?.sourceRunId,
@@ -532,11 +533,17 @@ export class TaskCommandService {
 
   /** F-082: read-only board of all visible tasks with due state. */
   async board(context: RequestContext) {
+    const data = await this.taskData(context);
+    const orgUnits = await this.repository.listOrgUnits(context.tenantId);
+    return { ...data, orgUnits };
+  }
+
+  /** 细粒度只读数据：可见任务、成员与关联使命，供各视图按需组合。 */
+  async taskData(context: RequestContext) {
     requirePermission(context, "work_task:read");
-    const [workspace, people, orgUnits, missions] = await Promise.all([
+    const [workspace, people, missions] = await Promise.all([
       this.workspace(context),
       this.repository.listPeople(context.tenantId),
-      this.repository.listOrgUnits(context.tenantId),
       this.repository.listMissions(context.tenantId),
     ]);
     const byId = new Map<string, WorkPackageWithDue>();
@@ -544,7 +551,7 @@ export class TaskCommandService {
       for (const item of list) if (!byId.has(item.id)) byId.set(item.id, item);
     }
     const tasks = [...byId.values()].filter((item) => !item.isTemplate);
-    return { tasks, people, orgUnits, missions: missions.filter((mission) => !mission.isTemplate && tasks.some((task) => task.missionId === mission.id)), actorId: context.actorId, generatedAt: new Date().toISOString() };
+    return { tasks, people, missions: missions.filter((mission) => !mission.isTemplate && tasks.some((task) => task.missionId === mission.id)), actorId: context.actorId, generatedAt: new Date().toISOString() };
   }
 
   /** F-084: 成员负载只读视图（供 Agent 定向分派前查询）。 */
@@ -619,7 +626,7 @@ export class TaskCommandService {
         ? `任务「${candidate.package.title}」已阻塞约 ${candidate.hours.toFixed(1)} 天（阻塞原因：${candidate.package.blockedReason ?? "未填写"}）。请发布人与负责人确认处置。截止 ${candidate.package.dueAt}。`
         : `任务「${candidate.package.title}」${candidate.kind === "overdue" ? `已逾期约 ${candidate.hours.toFixed(1)} 天` : `约 ${candidate.hours.toFixed(1)} 天后到期`}，负责人：${assignee?.displayName ?? (candidate.package.assignmentMode === "open_claim" ? "待承接" : "未分派")}，截止 ${candidate.package.dueAt}。请及时推进。`;
       const dedupKey = `${candidate.kind === "blocked_escalation" ? "task-escalation" : "task-reminder"}:${candidate.package.id}:${candidate.kind}:${dateKey}`;
-      const message = { ...createPoolMessage({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", subject, content, authorId: context.actorId, source: "agent" }), id: deterministicUuid(dedupKey) };
+      const message = { ...createPoolMessage({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", subject, content, kind: "notice", authorId: context.actorId, source: "agent" }), id: deterministicUuid(dedupKey) };
       const result = await this.repository.publishPoolMessage(message, messageEvent({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", messageId: message.id, eventType: "message_published", actorId: context.actorId }));
       if (result.created) created.push({ kind: candidate.kind, packageId: candidate.package.id, messageId: result.message.id });
       else deduplicated += 1;
@@ -658,7 +665,7 @@ export class TaskCommandService {
       `- 已完成/已取消：${done.length} 项`,
       `请确认后发出；如需详细任务列表可进入任务进度看板查看。`,
     ].join("\n");
-    const message = { ...createPoolMessage({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", subject: `工作进度摘要（${scope === "weekly" ? "周报" : "日报"} · ${periodKey}）`, content, authorId: context.actorId, source: "agent" }), id: deterministicUuid(`task-summary:${scope}:${periodKey}`) };
+    const message = { ...createPoolMessage({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", subject: `工作进度摘要（${scope === "weekly" ? "周报" : "日报"} · ${periodKey}）`, content, kind: "notice", authorId: context.actorId, source: "agent" }), id: deterministicUuid(`task-summary:${scope}:${periodKey}`) };
     const result = await this.repository.publishPoolMessage(message, messageEvent({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", messageId: message.id, eventType: "message_published", actorId: context.actorId }));
     return { scope, periodKey, summary: content, messageId: result.message.id, created: result.created, generatedAt: now.toISOString() };
   }

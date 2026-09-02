@@ -43,6 +43,26 @@ function isModelFailure(error: unknown) {
   return code.startsWith("MODEL_") || code.startsWith("AGENT_TOOL_LOOP_LIMIT") || code === "fetch failed";
 }
 
+const CORE_TOOL_SKILLS = new Set([
+  "work-orchestration",
+  "company-communication",
+  "enterprise-memory",
+  "enterprise-analysis",
+  "knowledge-collaboration",
+  "meeting-preparation",
+  "process-assistance",
+  "management-risk",
+  "identity-administration",
+]);
+const CHANNEL_TOOL_SKILLS = ["wecom-access-control", "wecom-application-messaging"];
+
+/** 按用户意图只注入相关工具：默认保留办公核心工具，渠道工具（企业微信）仅在提及渠道时注入。 */
+function filterToolsByIntent(tools: AgentTool[], message: string): AgentTool[] {
+  const text = message.toLocaleLowerCase("zh-CN");
+  const wantsChannel = /企业微信|wecom|微信|企微/.test(text);
+  return tools.filter((tool) => CORE_TOOL_SKILLS.has(tool.skillId) || (wantsChannel && CHANNEL_TOOL_SKILLS.includes(tool.skillId)));
+}
+
 const finalAnswerSchema = z.object({
   answer: z.string().trim().min(1).max(12_000),
   /** Accepted for backwards-compatible model protocol migration; never trusted for routing. */
@@ -113,7 +133,7 @@ export class AgentOrchestrator {
     try {
       const contextPackage = await this.contexts.build(context, run.contextRefs, { conversationId, message: input.message, runId: run.id });
       await this.store.saveCitations(context.tenantId, run.id, contextPackage.citations);
-      const availableTools = this.tools.available(context);
+      const availableTools = filterToolsByIntent(this.tools.available(context), input.message);
       const skillCatalog = this.skills.availableForTools(availableTools.map((tool) => tool.id));
       const system = [
         SYSTEM_PROMPT,
@@ -299,9 +319,14 @@ export class AgentOrchestrator {
     const tool = this.tools.get(proposal.toolId);
     const policy = assertToolPolicy(context, tool);
     if (!policy.requiresConfirmation) throw new Error("CONFIRMATION_POLICY_CHANGED");
-    const currentContext = await this.contexts.build(context, [`project:${(proposal.input as { projectId: string }).projectId}`]);
-    for (const [objectId, version] of Object.entries(proposal.expectedVersions)) {
-      if (currentContext.expectedVersions[objectId] !== version) throw new Error("PROPOSAL_OBJECT_VERSION_CONFLICT");
+    const projectId = typeof (proposal.input as { projectId?: unknown }).projectId === "string"
+      ? (proposal.input as { projectId: string }).projectId
+      : undefined;
+    if (projectId) {
+      const currentContext = await this.contexts.build(context, [`project:${projectId}`]);
+      for (const [objectId, version] of Object.entries(proposal.expectedVersions)) {
+        if (currentContext.expectedVersions[objectId] !== version) throw new Error("PROPOSAL_OBJECT_VERSION_CONFLICT");
+      }
     }
     const toolCall: AgentToolCall = {
       id: randomUUID(), tenantId: context.tenantId, agentRunId: proposal.agentRunId, confirmationId: approved.confirmation.id,

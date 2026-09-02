@@ -207,6 +207,7 @@ export type WorkPoolMessage = {
   orgUnitId?: string;
   subject: string;
   content: string;
+  kind: "announcement" | "notice";
   authorId: string;
   source: "human" | "agent";
   sourceRunId?: string;

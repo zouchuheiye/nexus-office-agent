@@ -1,31 +1,21 @@
-import { InMemoryEventStore, type EventStore } from "@/src/modules/events/application/event-store";
+import { InMemoryEventStore } from "@/src/modules/events/application/event-store";
 import { PostgresEventStore } from "@/src/modules/events/infrastructure/postgres-event-store";
 import { ManagementLoopService } from "@/src/modules/management-loop/application/service";
 import { getDevelopmentManagementRepository } from "@/src/modules/management-loop/infrastructure/in-memory-repository";
 import { PostgresManagementLoopRepository } from "@/src/modules/management-loop/infrastructure/postgres-repository";
 import { createPostgresDatabase } from "@/src/platform/database/postgres";
+import { moduleRuntime } from "@/src/platform/runtime/module-runtime";
 
-const runtime = globalThis as typeof globalThis & {
-  __nexusManagementEvents?: EventStore;
-  __nexusManagementService?: ManagementLoopService;
-  __nexusManagementRuntimeVersion?: number;
-};
+const runtimeGeneration = Symbol("management-loop");
 
 export function getManagementLoopService(): ManagementLoopService {
-  if (runtime.__nexusManagementRuntimeVersion !== 3) {
-    runtime.__nexusManagementEvents = new InMemoryEventStore();
-    runtime.__nexusManagementService = undefined;
-    runtime.__nexusManagementRuntimeVersion = 3;
-  }
-  if (!runtime.__nexusManagementService) {
+  return moduleRuntime("management-loop", runtimeGeneration, () => {
     if (process.env.DATABASE_URL) {
       const database = createPostgresDatabase(process.env.DATABASE_URL);
-      runtime.__nexusManagementEvents = new PostgresEventStore(database);
-      runtime.__nexusManagementService = new ManagementLoopService(new PostgresManagementLoopRepository(database), runtime.__nexusManagementEvents);
-    } else {
-      runtime.__nexusManagementEvents = new InMemoryEventStore();
-      runtime.__nexusManagementService = new ManagementLoopService(getDevelopmentManagementRepository(), runtime.__nexusManagementEvents);
+      const events = new PostgresEventStore(database);
+      return new ManagementLoopService(new PostgresManagementLoopRepository(database), events);
     }
-  }
-  return runtime.__nexusManagementService;
+    const events = new InMemoryEventStore();
+    return new ManagementLoopService(getDevelopmentManagementRepository(), events);
+  });
 }

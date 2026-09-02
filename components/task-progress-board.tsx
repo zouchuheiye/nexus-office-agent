@@ -1,17 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import {
+  useTaskBoard,
+  type BoardTask as Task,
+} from "@/components/board-client";
 import { AlertTriangle, CheckCircle2, CircleDashed, Clock, Download, LoaderCircle, RefreshCw, ShieldCheck } from "lucide-react";
-
-type Person = { id: string; displayName: string; orgName?: string; positionName?: string; activeTaskCount: number; inProgressTaskCount: number; dueSoonTaskCount: number; capacityPoints: number };
-type Task = {
-  id: string; title: string; description: string; priority: "critical" | "high" | "medium" | "low";
-  assignmentMode: "direct" | "open_claim"; assigneeId?: string; targetOrgUnitId?: string;
-  dueAt: string; startedAt?: string; estimatedDays?: number; capacityPoints: number;
-  status: "published" | "assigned" | "claimed" | "in_progress" | "blocked" | "in_review" | "completed" | "cancelled";
-  dueState?: "overdue" | "due_soon" | "normal" | "done"; publishedBy: string; version: number;
-};
-type Board = { tasks: Task[]; people: Person[]; orgUnits: Array<{ id: string; name: string }>; actorId: string; generatedAt: string };
 
 const priorityCopy = { critical: "紧急", high: "高", medium: "中", low: "低" } as const;
 const dueCopy: Record<string, string> = { overdue: "已逾期", due_soon: "临期", normal: "进行中", done: "已完成" };
@@ -22,13 +16,6 @@ const columns: Array<{ key: string; label: string; statuses: Task["status"][] }>
   { key: "done", label: "已完成", statuses: ["completed"] },
   { key: "cancelled", label: "已取消", statuses: ["cancelled"] },
 ];
-
-async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  const payload = await response.json().catch(() => ({})) as { data?: T; error?: { message?: string } };
-  if (!response.ok) throw new Error(payload.error?.message || "请求未完成");
-  return payload.data as T;
-}
 
 function formatDate(value: string) {
   const date = new Date(value);
@@ -41,29 +28,8 @@ function daysLeft(task: Task): string {
 }
 
 export function TaskProgressBoard() {
-  const [board, setBoard] = useState<Board | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const { board, loading, error, load } = useTaskBoard();
   const [scope, setScope] = useState<"all" | "mine" | "published">("all");
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await api<Board>("/api/v1/task-command/board", { cache: "no-store" });
-      setBoard(data);
-      setError("");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "看板加载失败");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
-  useEffect(() => { const timer = window.setInterval(() => void load(), 30_000); return () => window.clearInterval(timer); }, [load]);
 
   const peopleById = useMemo(() => new Map(board?.people.map((person) => [person.id, person]) ?? []), [board]);
   const tasks = useMemo(() => {

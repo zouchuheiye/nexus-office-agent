@@ -4,21 +4,16 @@ import { PostgresEnterpriseGovernanceRepository } from "@/src/modules/enterprise
 import { InMemoryEventStore } from "@/src/modules/events/application/event-store";
 import { PostgresEventStore } from "@/src/modules/events/infrastructure/postgres-event-store";
 import { createPostgresDatabase } from "@/src/platform/database/postgres";
+import { moduleRuntime } from "@/src/platform/runtime/module-runtime";
 
-const runtime = globalThis as typeof globalThis & { __nexusGovernanceService?: EnterpriseGovernanceService; __nexusGovernanceServiceVersion?: number };
+const runtimeGeneration = Symbol("enterprise-governance");
 
 export function getEnterpriseGovernanceService() {
-  if (runtime.__nexusGovernanceServiceVersion !== 1) {
-    runtime.__nexusGovernanceService = undefined;
-    runtime.__nexusGovernanceServiceVersion = 1;
-  }
-  if (!runtime.__nexusGovernanceService) {
+  return moduleRuntime("enterprise-governance", runtimeGeneration, () => {
     if (process.env.DATABASE_URL) {
       const database = createPostgresDatabase(process.env.DATABASE_URL);
-      runtime.__nexusGovernanceService = new EnterpriseGovernanceService(new PostgresEnterpriseGovernanceRepository(database), new PostgresEventStore(database));
-    } else {
-      runtime.__nexusGovernanceService = new EnterpriseGovernanceService(getDevelopmentEnterpriseGovernanceRepository(), new InMemoryEventStore());
+      return new EnterpriseGovernanceService(new PostgresEnterpriseGovernanceRepository(database), new PostgresEventStore(database));
     }
-  }
-  return runtime.__nexusGovernanceService;
+    return new EnterpriseGovernanceService(getDevelopmentEnterpriseGovernanceRepository(), new InMemoryEventStore());
+  });
 }

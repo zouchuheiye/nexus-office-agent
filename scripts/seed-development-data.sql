@@ -39,4 +39,9 @@ UPDATE work_missions
    AND project_id IS NULL
    AND is_template=false;
 
+-- Demo announcement for the announcement center (kind=announcement vs notice).
+INSERT INTO work_pool_messages (id,tenant_id,pool_scope,org_unit_id,subject,content,kind,author_id,source,source_run_id,created_at)
+VALUES ('80000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001','company',NULL,'【公告】公告中心已上线','公告与通知已分开展示；发布公告走 Agent 提案确认，不直接落库。','announcement','10000000-0000-4000-8000-000000000001','human',NULL,now())
+ON CONFLICT (id) DO NOTHING;
+
 COMMIT;

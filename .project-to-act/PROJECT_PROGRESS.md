@@ -247,3 +247,19 @@
 - 2026-08-28：完成“人员 × 项目多视图与拖拽分配提案”（F-087）和离线模型连接恢复修复，形成 E-104。人员 × 项目模块从空白占位重写为矩阵/项目泳道/人员泳道三种视图，复用 board 的 mission.projectId + assigneeId 展示实时关系与进度；人员池/矩阵行头拖拽到项目生成 Agent 提案（onAsk）。修复模型网关瞬时网络失败：重试 + 归一为 MODEL_* 可降级错误，编排器不再把离线 fetch failed 当成 500 硬错误。补齐演示数据：scripts/seed-development-data.sql/.ts 将演示目标/项目/里程碑/任务/风险写入 PostgreSQL，并把已有非模板 mission 关联到演示项目（package.json 增加 db:seed:development）。验证：typecheck 0 错误、lint 0 错误/0 警告、定向 vitest 14/14 通过、真实 PostgreSQL board/bootstrap 冒烟通过。遗留：拖拽仅生成提案未接确认写入；真实企业 Gate 不变。
 
 - 2026-08-28：新增“员工画像”（F-088），形成 E-105。新增左侧导航“员工画像”与独立模块页，从 board 的 requiredSkills 派生员工技能画像，汇总负载/容量/参与项目，列出当前任务，并基于技能重合与开放任务生成“任务匹配建议”，一键触发 Agent 生成分派提案。验证：typecheck 0 错误、lint 0 错误/0 警告、真实 board 返回 requiredSkills、页面渲染成功。遗留：演示数据暂无未分派开放任务（建议区为空态）；拖拽/分派仍走 Agent 提案未接确认写入；真实企业 Gate 不变。
+
+- 2026-08-31：零风险架构清理（E-106，见 docs/ARCHITECTURE_CLEANUP.md）。完成三项：新增 `components/board-client.ts` 统一三个视图（人员×项目、员工画像、任务进度）的 board 类型/取数/状态文案并接入 `useTaskBoard()`；`office-shell.tsx` 以 `viewRenderers` 查表替代嵌套三元路由；`api-response.ts` 改为有序 `errorRules` 表驱动错误映射。验证：typecheck 0 错误、lint 0 错误/0 警告、`tests/unit/api-response.test.ts` 通过、project-people/employee-profile/command/task-progress/today 五页渲染正常。行为不变，不改变任何 RLS/审计/权限语义。
+
+- 2026-08-31：新增“公告中心”（F-089），形成 E-107。消息池消息增加 `kind`（announcement/notice）：0047 迁移新增列与索引，领域 `WorkPoolMessage.kind`、`publishPoolMessageSchema.kind`、Postgres 仓储、Agent `communication.publish_message`（kind 参数）与日报/提醒（notice）全部打通；左侧导航新增“公告中心”页，公告/通知分栏展示，原公告可反馈，发布走 Agent 提案；右侧消息栏未改动。验证：typecheck/lint 0、三个相关单测 25/25 通过、workspace 返回 kind（1 公告 + 7 通知）、页面渲染成功。遗留：公告已读/置顶未做。
+
+- 2026-08-31：架构收敛四件套（E-108，见 docs/ARCHITECTURE_CLEANUP.md）。1) 新增 `components/workspace-client.ts`，工作对话与公告中心共用 `useWorkspace()`，消除 workspace 取数复制；2) 新增 `src/platform/runtime/module-runtime.ts`，12 个 runtime 全部改为模块代际单例（重编译即重建），删除手工版本号；3) 拆 board：新增 `GET /api/v1/task-command/people|packages|missions`，`board-client` 并行取细粒度接口，旧 board 保留兼容；4) 范围收敛：左侧导航默认只显示核心 5 项（对话/任务/审批/公告/人员×项目），其余折叠进“更多模块”；Agent 工具按意图注入（默认办公核心工具，企业微信仅在提及渠道时注入）。验证：typecheck/lint 0、相关单测 37/37 通过、新接口 people=4/packages=3/missions=2、四页渲染正常、Agent 实测 200 正常回答、board 兼容保留。遗留：双仓储切换（#4）与 Pi 部署边界（#7 后半）未做。
+
+- 2026-08-31：按用户要求撤销 E-108 中的“左侧导航更多模块折叠”，恢复完整导航（office-shell/globals.css 回退）；Agent 工具按意图注入保留。仅 UI 回退，无功能损失。
+
+- 2026-08-31：按用户要求移除“人员 × 项目”页的项目泳道/人员泳道视图，只保留矩阵并精修 UI（顶部概览条、项目列进度/成员数、人员行负载、格子悬停与拖拽高亮、统一间距），形成 E-109。验证：typecheck/lint 0、页面不再包含泳道与模式切换、概览条正常渲染。
+
+- 2026-09-01：按用户要求将“人员 × 项目”模块更名为“项目管理”（导航、页面标题、kicker、说明同步），定位明确为“任务与人员管理平台”；矩阵保持 项目列 × 成员行 × 任务格 的形态，形成 E-110。验证：typecheck/lint 0、页面标题与导航更新正常。
+
+- 2026-09-01：按用户要求移除“员工画像”（F-088）：删除导航、viewRenderers 注册、组件 `components/employee-profile.tsx` 与 `.ep-*` 样式，核心明确收敛为“项目管理”；工作对话仍保留任务/沟通能力，形成 E-111。验证：typecheck/lint 0、页面不再包含员工画像入口。
+
+- 2026-09-01：按用户要求将“公告中心”改为“我的任务”（F-090）：移除公告中心页面/导航/样式，新增个人任务页（只看分配给自己的任务，按状态分组，支持开始/解除阻塞/提交验收/完成/交接和“让 Agent 整理”）；消息池 `kind` 字段与右侧消息栏保留，形成 E-112。验证：typecheck/lint 0、导航与页面切换正常。

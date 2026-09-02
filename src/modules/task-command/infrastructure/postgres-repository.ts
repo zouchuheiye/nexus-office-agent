@@ -50,7 +50,7 @@ const mapArtifactVersion = (row: Row): WorkArtifactVersion => ({
 const poolKey = (scope: string, orgUnitId: unknown): WorkPoolMessage["poolKey"] => scope === "company" ? "company" : text(orgUnitId);
 const mapPoolMessage = (row: Row): WorkPoolMessage => ({
   id: text(row.id), tenantId: text(row.tenant_id), poolKey: poolKey(text(row.pool_scope), row.org_unit_id), poolScope: row.pool_scope as WorkPoolMessage["poolScope"], orgUnitId: optionalText(row.org_unit_id),
-  subject: text(row.subject), content: text(row.content), authorId: text(row.author_id), source: row.source as WorkPoolMessage["source"], sourceRunId: optionalText(row.source_run_id), createdAt: text(row.created_at),
+  subject: text(row.subject), content: text(row.content), kind: (row.kind ?? "notice") as WorkPoolMessage["kind"], authorId: text(row.author_id), source: row.source as WorkPoolMessage["source"], sourceRunId: optionalText(row.source_run_id), createdAt: text(row.created_at),
 });
 const mapPoolFeedback = (row: Row): WorkPoolFeedback => ({
   id: text(row.id), tenantId: text(row.tenant_id), messageId: text(row.message_id), content: text(row.content), authorId: text(row.author_id), createdAt: text(row.created_at),
@@ -278,9 +278,9 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
 
   async publishPoolMessage(message: WorkPoolMessage, event: Omit<WorkMessageEvent, "sequence">) {
     return this.database.withTenant(message.tenantId, async (db) => {
-      const inserted = await db.query(`INSERT INTO work_pool_messages(id,tenant_id,pool_scope,org_unit_id,subject,content,author_id,source,source_run_id,created_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id`,
-      [message.id,message.tenantId,message.poolScope,message.orgUnitId ?? null,message.subject,message.content,message.authorId,message.source,message.sourceRunId ?? null,message.createdAt]);
+      const inserted = await db.query(`INSERT INTO work_pool_messages(id,tenant_id,pool_scope,org_unit_id,subject,content,kind,author_id,source,source_run_id,created_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING RETURNING id`,
+      [message.id,message.tenantId,message.poolScope,message.orgUnitId ?? null,message.subject,message.content,message.kind,message.authorId,message.source,message.sourceRunId ?? null,message.createdAt]);
       if (!inserted.length) {
         const rows = message.sourceRunId
           ? await db.query("SELECT * FROM work_pool_messages WHERE tenant_id=$1 AND source_run_id=$2", [message.tenantId,message.sourceRunId])

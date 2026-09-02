@@ -24,41 +24,15 @@ import {
   UsersRound,
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  api,
+  useWorkspace,
+  type TaskHandoff,
+  type TimelineEvent,
+  type WorkspaceTask as Task,
+} from "@/components/workspace-client";
 
 type Citation = { id: string; label: string; excerpt: string; objectType: string };
-type PersistedMessage = { id: string; role: "user" | "assistant" | "tool"; content: string; runId?: string; route: { skills: string[]; tools: string[] }; citations: Citation[]; createdAt: string };
-type Person = { id: string; displayName: string; orgName?: string; positionName?: string; activeTaskCount: number };
-type Task = {
-  id: string; missionId: string; title: string; description: string; acceptanceCriteria: string; requiredSkills: string[];
-  assignmentMode: "direct" | "open_claim"; assigneeId?: string; targetOrgUnitId?: string; publishedBy: string; priority: "critical" | "high" | "medium" | "low";
-  dueAt: string; startedAt?: string; estimatedDays?: number; dueState?: "overdue" | "due_soon" | "normal" | "done"; capacityPoints: number; status: "published" | "assigned" | "claimed" | "in_progress" | "blocked" | "in_review" | "completed" | "cancelled";
-  evidenceRefs: string[]; blockedReason?: string; isTemplate: boolean; missingFields: string[]; version: number;
-};
-type PoolFeedback = { id: string; messageId: string; content: string; authorId: string; createdAt: string };
-type PoolMessage = { id: string; poolKey: string; subject: string; content: string; authorId: string; createdAt: string; feedback: PoolFeedback[] };
-type MessagePool = { key: string; name: string; scope: "company" | "department"; orgUnitId?: string; messages: PoolMessage[] };
-type TaskHandoff = {
-  id: string; packageId: string; fromAssigneeId: string; toAssigneeId: string; note: string;
-  currentProgress?: string; completedWork?: string; pendingWork?: string; attentionPoints?: string;
-  artifactRefs: string[]; status: "pending" | "accepted" | "rejected";
-  responseNote?: string; createdAt: string; respondedAt?: string;
-  snapshot: { packageVersion: number; title: string; description: string; acceptanceCriteria: string; evidenceRefs: string[]; dueAt: string };
-};
-type TimelineEvent = { id: string; sequence: number; eventType: string; actorId: string; occurredAt: string; payload: Record<string, unknown> };
-type Workspace = {
-  conversation: { id: string; title: string };
-  messages: PersistedMessage[];
-  people: Person[];
-  orgUnits: Array<{ id: string; name: string }>;
-  myTasks: Task[];
-  availableTasks: Task[];
-  publishedByMe: Task[];
-  templates: Task[];
-  handoffs: TaskHandoff[];
-  pendingHandoffs: Array<{ handoff: TaskHandoff; task: Task }>;
-  messagePools: MessagePool[];
-  generatedAt: string;
-};
 type DisplayMessage = {
   role: "assistant" | "user";
   content: string;
@@ -90,13 +64,6 @@ const officeShortcuts = [
   { label: "经营", icon: BarChart3, prompt: "帮我分析一个经营问题，严格区分事实、推断和建议。" },
 ] as const;
 
-async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || "请求未完成");
-  return payload.data as T;
-}
-
 export function WorkCommandCenter({
   messages,
   query,
@@ -118,9 +85,7 @@ export function WorkCommandCenter({
   onHydrate: (conversationId: string, messages: DisplayMessage[]) => void;
   onNotice: (message: string) => void;
 }) {
-  const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const { workspace, loading, error, load: loadWorkspace } = useWorkspace();
   const [taskMode, setTaskMode] = useState<"mine" | "available" | "published" | "handoffs">("mine");
   const [railMode, setRailMode] = useState<"tasks" | "messages">("tasks");
   const [busyTask, setBusyTask] = useState("");
@@ -139,26 +104,13 @@ export function WorkCommandCenter({
     } catch { /* timeline is best-effort */ }
   }, [timelines]);
 
-  const loadWorkspace = useCallback(async () => {
-    try {
-      const data = await api<Workspace>("/api/v1/task-command/workspace", { cache: "no-store" });
-      setWorkspace(data);
-      setError("");
-      if (!hydrated.current) {
-        hydrated.current = true;
-        onHydrate(data.conversation.id, data.messages.filter(({ role }) => role !== "tool").map((item) => ({
-          role: item.role as "assistant" | "user", content: item.content, runId: item.runId, citations: item.citations, routing: item.route,
-        })));
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "任务工作区加载失败");
-    } finally { setLoading(false); }
-  }, [onHydrate]);
-
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadWorkspace(), 0);
-    return () => window.clearTimeout(timer);
-  }, [loadWorkspace]);
+    if (!workspace || hydrated.current) return;
+    hydrated.current = true;
+    onHydrate(workspace.conversation.id, workspace.messages.filter(({ role }) => role !== "tool").map((item) => ({
+      role: item.role as "assistant" | "user", content: item.content, runId: item.runId, citations: item.citations, routing: item.route,
+    })));
+  }, [workspace, onHydrate]);
   useEffect(() => {
     const stream = new EventSource("/api/v1/task-command/message-events");
     const refresh = () => void loadWorkspace();
@@ -283,13 +235,13 @@ export function WorkCommandCenter({
         <div className="command-suggestions" aria-label="常用办公入口">{officeShortcuts.map(({ label, prompt, icon: Icon }) => <button type="button" key={label} onClick={() => onQueryChange(prompt)}><Icon size={15} />{label}</button>)}</div>
         <form className="primary-composer" onSubmit={onSubmit}>
           <label htmlFor="primary-work-command">说说你要处理什么</label>
-          <textarea id="primary-work-command" value={query} onChange={(event) => onQueryChange(event.target.value)} onKeyDown={handleComposerKeyDown} rows={4} placeholder="输入一件要处理的事…" />
+          <textarea id="primary-work-command" value={query} onChange={(event) => onQueryChange(event.target.value)} onKeyDown={handleComposerKeyDown} rows={6} placeholder="输入一件要处理的事…" />
           <footer><div><span><ShieldCheck size={13} />只使用当前账号有权访问的数据和能力</span><small>Ctrl / ⌘ + Enter 发送</small></div><button type="submit" aria-label="发送" disabled={!query.trim() || isThinking}>{isThinking ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}</button></footer>
         </form>
       </section>
 
       <aside className="live-task-rail">
-        <header><div><h2>{railMode === "tasks" ? "任务" : "消息池"}</h2><p>{workspace ? `已同步 · ${formatTime(workspace.generatedAt)}` : "正在同步"}</p></div><div className="task-rail-actions"><button className="task-publish-action" type="button" onClick={() => onQueryChange(railMode === "tasks" ? "我需要正式发布一项任务，请先确认目标、接收对象（个人或部门）、截止时间、验收标准和分派方式。" : "我需要推送一条沟通消息。请理解内容后放入当前可见的合适消息池；这不是任务，不需要负责人、截止时间或验收。") }><Plus size={14} />{railMode === "tasks" ? "新建" : "推送"}</button><button type="button" onClick={() => void loadWorkspace()} aria-label="刷新工作区"><RotateCcw className={loading ? "spin" : ""} size={15} /></button></div></header>
+        <header><div><h2>{railMode === "tasks" ? "任务" : "消息池"}</h2><p>{workspace ? `已同步 · ${formatTime(workspace.generatedAt)}` : "正在同步"}</p></div><div className="task-rail-actions"><button className="task-publish-action" type="button" onClick={() => onQueryChange(railMode === "tasks" ? "发布一项任务：\n任务名称：\n接收对象（个人或部门）：\n目标：\n截止时间：\n验收标准（例：提供测试报告并通过回归；交付可运行产物和使用说明）：\n分派方式（例：直接分派给张三 / 研发中心开放承接）：" : "我需要推送一条沟通消息。请理解内容后放入当前可见的合适消息池；这不是任务，不需要负责人、截止时间或验收。") }><Plus size={14} />{railMode === "tasks" ? "发布任务" : "推送"}</button><button type="button" onClick={() => void loadWorkspace()} aria-label="刷新工作区"><RotateCcw className={loading ? "spin" : ""} size={15} /></button></div></header>
         <div className="task-rail-tabs task-rail-mode-tabs" role="tablist" aria-label="工作上下文">
           <button type="button" role="tab" aria-selected={railMode === "tasks"} className={railMode === "tasks" ? "active" : ""} onClick={() => setRailMode("tasks")}><ListTodo size={14} />任务 <b>{(workspace?.myTasks.length ?? 0) + (workspace?.availableTasks.length ?? 0)}</b></button>
           <button type="button" role="tab" aria-selected={railMode === "messages"} className={railMode === "messages" ? "active" : ""} onClick={() => setRailMode("messages")}><MessageCircle size={14} />消息 <b>{messageCount}</b></button>
@@ -336,5 +288,3 @@ function formatRelative(value: string) {
   const hours = Math.round((Date.parse(value) - Date.now()) / 3_600_000);
   return hours < 0 ? `逾期 ${Math.abs(hours)} 小时` : hours < 24 ? `${hours} 小时后截止` : `${Math.ceil(hours / 24)} 天后截止`;
 }
-
-

@@ -122,6 +122,7 @@ export const publishPoolMessageSchema = z.object({
   poolKey: z.union([z.literal("company"), z.uuid()]),
   subject: z.string().trim().min(2).max(160),
   content: z.string().trim().min(2).max(1_200),
+  kind: z.enum(["announcement", "notice"]).optional(),
 }).strict();
 
 export const appendPoolFeedbackSchema = z.object({
