@@ -158,6 +158,16 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
     execute(context, input) { return service.findTask(context, z.object({ keyword: z.string().trim().min(1).max(160), projectId: z.uuid().optional() }).strict().parse(input)); },
   });
   registry.register({
+    id: "work.project_task_inventory", skillId: "work-orchestration", version: 1,
+    description: "一次列出指定项目下当前用户可见的全部任务（含各状态与所在分类，含模板与已完成，供筛选归类）。当用户要求“列出某项目的任务/未完成任务/盘点项目任务”时，应优先调用本工具获得全量清单，不要用多个关键词反复调用 work.find_task 猜测。",
+    requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { projectId: { type: "string", format: "uuid" } }, required: ["projectId"] },
+    inputSchema: z.object({ projectId: z.uuid() }).strict(),
+    preview(input) { const value = z.object({ projectId: z.uuid() }).parse(input); return `盘点项目 ${value.projectId} 的可见任务。`; },
+    execute(context, input) { return service.projectTaskInventory(context, z.object({ projectId: z.uuid() }).strict().parse(input)); },
+  });
+  registry.register({
     id: "communication.publish_message", skillId: "company-communication", version: 1,
     description: "将沟通、同步、征询或反馈整理后放入当前用户可见的公司或部门消息池。它不是任务：不产生负责人、截止时间、验收、任务状态或确认门禁。kind=announcement 用于公告/置顶，kind=notice 用于普通通知或提醒。",
     requiredPermissions: ["message_pool:publish"], riskLevel: 1, confirmationPolicy: "never", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 2,

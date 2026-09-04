@@ -151,6 +151,41 @@ export class TaskCommandService {
     return { tasks: [...tasks.values()], generatedAt: data.generatedAt };
   }
 
+  async projectTaskInventory(context: RequestContext, input: { projectId: string }) {
+    requirePermission(context, "work_task:read");
+    const data = await this.workspace(context);
+    const missionById = new Map(data.missions.map((mission) => [mission.id, mission]));
+    const tasks = new Map<string, {
+      id: string; title: string; status: string; category: string[]; missionId: string; missionTitle?: string;
+      assignmentMode?: string; assigneeId?: string; publishedBy: string; dueAt: string; dueState?: string;
+      isTemplate: boolean; missingFields: string[]; version: number;
+    }>();
+    const push = (task: { id: string; missionId: string; title: string; status: string; assignmentMode?: string; assigneeId?: string; publishedBy: string; dueAt: string; dueState?: string; isTemplate: boolean; missingFields: string[]; version: number }, category: string) => {
+      const mission = missionById.get(task.missionId);
+      if (mission?.projectId !== input.projectId) return;
+      const existing = tasks.get(task.id);
+      if (existing) {
+        if (!existing.category.includes(category)) existing.category.push(category);
+        return;
+      }
+      tasks.set(task.id, {
+        id: task.id, title: task.title, status: task.status, category: [category], missionId: task.missionId,
+        missionTitle: mission?.title, assignmentMode: task.assignmentMode, assigneeId: task.assigneeId,
+        publishedBy: task.publishedBy, dueAt: task.dueAt, dueState: task.dueState,
+        isTemplate: task.isTemplate, missingFields: task.missingFields, version: task.version,
+      });
+    };
+    for (const task of data.myTasks) push(task, "我的");
+    for (const task of data.availableTasks) push(task, "可承接");
+    for (const task of data.publishedByMe) push(task, "已发布");
+    for (const task of data.templates) push(task, "模板");
+    for (const task of data.handoffTasks) push(task, "交接参与");
+    for (const entry of data.pendingHandoffs) push(entry.task, "待签收");
+    const order: Record<string, number> = { published: 0, assigned: 1, claimed: 2, in_progress: 3, blocked: 4, in_review: 5, completed: 6, cancelled: 7 };
+    const listed = [...tasks.values()].sort((left, right) => (order[left.status] ?? 9) - (order[right.status] ?? 9) || left.title.localeCompare(right.title, "zh-CN"));
+    return { projectId: input.projectId, tasks: listed, generatedAt: data.generatedAt };
+  }
+
   async appendMessage(context: RequestContext, input: Omit<WorkConversationMessage, "id" | "tenantId" | "createdAt">) {
     if (input.role === "user" && input.conversationId !== (await this.repository.getOrCreatePrimaryConversation(context.tenantId, context.actorId)).id) {
       throw new Error("WORK_CONVERSATION_NOT_FOUND");
