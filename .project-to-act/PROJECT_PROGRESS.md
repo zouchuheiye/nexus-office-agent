@@ -307,3 +307,5 @@
 - 2026-09-04：Agent 取消确认提案实测（E-133）：重启 Worker（含 work.cancel_task）后让 Agent"取消任务 AI产品经理项目 c4f57d1c"，输出 kind=proposal / status=awaiting_confirmation，tools=work.cancel_task，提案预览"将取消任务包…取消后不可恢复并保留审计"，未直接执行；测试提案已清理，任务保留。验证完成。
 
 - 2026-09-04：移除"我的"任务卡上的"开始"按钮（E-134）：assigned/claimed 状态不再显示一键开始按钮，卡片底部改显示相对截止时间；状态推进仍可经 Agent 或后续动作完成。验证：typecheck 0。
+
+- 2026-09-04：待交接改为双向可见（E-135）：服务端 `workspace.pendingHandoffs` 从"仅待我签收（to=我）"扩展为"待我签收 + 我发起待对方签收"，每条带 `direction: incoming|outgoing`；任务侧栏"待交接"列出两类，卡片对 incoming 保持 签收/退回 按钮，对 outgoing 显示"等对方签收"标记（前端用两张映射分离，不干扰原签收逻辑）；find_task / project_task_inventory 分类标注相应调整为 待签收/待对方签收。验证：typecheck 0；workspace 返回 3 条 outgoing（华东客服路由压测、门禁漂移验证2、AI产品经理项目）。说明：出向交接暂无"撤回"动作，属后续项。

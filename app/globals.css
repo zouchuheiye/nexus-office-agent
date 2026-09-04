@@ -2017,3 +2017,13 @@ kbd { display: inline-flex; align-items: center; gap: 2px; padding: 3px 5px; col
 }
 .task-cancel-action:hover { background: color-mix(in srgb, #d64545 10%, transparent); }
 .task-cancel-action:disabled { opacity: .55; cursor: default; }
+
+.task-handoff-waiting {
+  margin-left: auto;
+  color: var(--text-muted, #8b93a7);
+  font-size: 11px;
+  border: 1px solid var(--rule, rgba(128,128,128,.25));
+  border-radius: 6px;
+  padding: 4px 8px;
+  white-space: nowrap;
+}

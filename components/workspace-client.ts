@@ -19,6 +19,11 @@ export type TaskHandoff = {
   responseNote?: string; createdAt: string; respondedAt?: string;
   snapshot: { packageVersion: number; title: string; description: string; acceptanceCriteria: string; evidenceRefs: string[]; dueAt: string };
 };
+export type TaskHandoffEntry = {
+  handoff: TaskHandoff;
+  task: WorkspaceTask;
+  direction: "incoming" | "outgoing";
+};
 export type TimelineEvent = { id: string; sequence: number; eventType: string; actorId: string; occurredAt: string; payload: Record<string, unknown> };
 export type PersistedMessage = { id: string; role: "user" | "assistant" | "tool"; content: string; runId?: string; route: { skills: string[]; tools: string[] }; citations: Array<{ id: string; label: string; excerpt: string; objectType: string }>; createdAt: string };
 export type WorkspaceData = {
@@ -31,7 +36,7 @@ export type WorkspaceData = {
   publishedByMe: WorkspaceTask[];
   templates: WorkspaceTask[];
   handoffs: TaskHandoff[];
-  pendingHandoffs: Array<{ handoff: TaskHandoff; task: WorkspaceTask }>;
+  pendingHandoffs: TaskHandoffEntry[];
   messagePools: MessagePool[];
   generatedAt: string;
 };

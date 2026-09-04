@@ -108,9 +108,9 @@ export class TaskCommandService {
       templates: visible.filter((item) => item.publishedBy === context.actorId && item.isTemplate).map(withDueState),
       handoffTasks: visible.filter((item) => handoffParticipantPackageIds.has(item.id)).map(withDueState),
       handoffs: visibleHandoffs,
-      pendingHandoffs: visibleHandoffs.filter((item) => item.status === "pending" && item.toAssigneeId === context.actorId).flatMap((handoff) => {
+      pendingHandoffs: visibleHandoffs.filter((item) => item.status === "pending" && (item.toAssigneeId === context.actorId || item.fromAssigneeId === context.actorId)).flatMap((handoff) => {
         const task = visible.find((item) => item.id === handoff.packageId);
-        return task ? [{ handoff, task }] : [];
+        return task ? [{ handoff, task, direction: handoff.toAssigneeId === context.actorId ? "incoming" : "outgoing" as const }] : [];
       }),
       messagePools,
       generatedAt: new Date().toISOString(),
@@ -147,7 +147,7 @@ export class TaskCommandService {
     for (const task of data.publishedByMe) push(task, "已发布");
     for (const task of data.templates) push(task, "模板");
     for (const task of data.handoffTasks) push(task, "交接参与");
-    for (const entry of data.pendingHandoffs) push(entry.task, "待签收");
+    for (const entry of data.pendingHandoffs) push(entry.task, entry.direction === "incoming" ? "待签收" : "待对方签收");
     return { tasks: [...tasks.values()], generatedAt: data.generatedAt };
   }
 
@@ -180,7 +180,7 @@ export class TaskCommandService {
     for (const task of data.publishedByMe) push(task, "已发布");
     for (const task of data.templates) push(task, "模板");
     for (const task of data.handoffTasks) push(task, "交接参与");
-    for (const entry of data.pendingHandoffs) push(entry.task, "待签收");
+    for (const entry of data.pendingHandoffs) push(entry.task, entry.direction === "incoming" ? "待签收" : "待对方签收");
     const order: Record<string, number> = { published: 0, assigned: 1, claimed: 2, in_progress: 3, blocked: 4, in_review: 5, completed: 6, cancelled: 7 };
     const listed = [...tasks.values()].sort((left, right) => (order[left.status] ?? 9) - (order[right.status] ?? 9) || left.title.localeCompare(right.title, "zh-CN"));
     return { projectId: input.projectId, tasks: listed, generatedAt: data.generatedAt };
