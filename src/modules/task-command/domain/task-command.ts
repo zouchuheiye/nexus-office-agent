@@ -454,6 +454,19 @@ export function respondToTaskHandoff(value: WorkTaskHandoff, input: { status: "a
   };
 }
 
+export function revokeTaskHandoff(value: WorkTaskHandoff, input: { respondedBy: string; responseRunId?: string }, now = new Date()): WorkTaskHandoff {
+  if (value.status !== "pending") throw new Error("WORK_HANDOFF_NOT_PENDING");
+  if (input.respondedBy !== value.fromAssigneeId && input.respondedBy !== value.initiatedBy) throw new Error("WORK_HANDOFF_REVOKE_FORBIDDEN");
+  return {
+    ...value,
+    status: "rejected",
+    responseNote: "发起人撤回交接",
+    respondedBy: input.respondedBy,
+    responseRunId: input.responseRunId,
+    respondedAt: now.toISOString(),
+  };
+}
+
 export function claimWorkPackage(value: WorkPackage, actorId: string, now = new Date()): WorkPackage {
   if (value.assignmentMode !== "open_claim" || value.status !== "published" || value.assigneeId) throw new Error("WORK_PACKAGE_NOT_CLAIMABLE");
   const timestamp = now.toISOString();

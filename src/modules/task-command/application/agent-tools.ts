@@ -128,6 +128,16 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
     execute(context, input, execution) { const value = respondHandoffSchema.parse(input); const { handoffId, ...response } = value; return service.respondToTaskHandoff(context, handoffId, response, { source: "agent", sourceRunId: execution?.agentRunId }); },
   });
   registry.register({
+    id: "work.revoke_task_handoff", skillId: "work-orchestration", version: 1,
+    description: "撤回当前用户作为原负责人发起的待签收交接（对方尚未签收）。撤回后交接作废、任务责任继续留在原负责人；本工具只生成待人工确认的撤回提案，确认后才执行。",
+    requiredPermissions: ["work_task:update"], riskLevel: 2, confirmationPolicy: "always", sideEffect: "internal_idempotent", timeoutMs: 15_000, maxAttempts: 3,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { handoffId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 } }, required: ["handoffId", "expectedVersion"] },
+    inputSchema: z.object({ handoffId: z.uuid(), expectedVersion: z.number().int().positive() }).strict(),
+    preview(input) { const value = z.object({ handoffId: z.uuid(), expectedVersion: z.number().int().positive() }).strict().parse(input); return `将撤回交接 ${value.handoffId}（任务版本 ${value.expectedVersion}），撤回后对方不能再签收，任务继续留在原负责人。`; },
+    execute(context, input, execution) { const value = z.object({ handoffId: z.uuid(), expectedVersion: z.number().int().positive() }).strict().parse(input); return service.revokeTaskHandoff(context, value.handoffId, value.expectedVersion, { source: "agent", sourceRunId: execution?.agentRunId }); },
+  });
+  registry.register({
     id: "work.get_task_handoff_trail", skillId: "work-orchestration", version: 1,
     description: "查询当前用户有权读取的任务交接链，返回每一棒的交接说明、冻结任务快照、文件/资料引用、签收或退回结果。回答交接进度、责任归属或文件连续性前应优先使用本工具核验。",
     requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,

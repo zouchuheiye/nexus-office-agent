@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { RequestContext } from "@/src/platform/context/request-context";
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
 import type { AppendPoolFeedbackInput, AppendTaskArtifactVersionInput, CreateTaskTemplateInput, ExportReportInput, GeneratePeriodicSummaryInput, InitiateTaskHandoffInput, PublishMissionInput, PublishPoolMessageInput, RegisterTaskArtifactInput, RespondToTaskHandoffInput, RunReminderScanInput, TransitionPackageInput, UpdateTaskTemplateInput } from "@/src/modules/task-command/application/schemas";
-import { claimWorkPackage, collectTaskReminderCandidates, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, deterministicUuid, dueStateOf, handoffWorkPackage, respondToTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
+import { claimWorkPackage, collectTaskReminderCandidates, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, deterministicUuid, dueStateOf, handoffWorkPackage, respondToTaskHandoff, revokeTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
 
 function hasPermission(context: RequestContext, permission: string): boolean {
   const [resource, action] = permission.split(":");
@@ -454,6 +454,39 @@ export class TaskCommandService {
     });
     if (!changed) throw new Error("WORK_HANDOFF_CHAIN_CHANGED");
     return { handoff: next, task: nextPackage ?? task };
+  }
+
+  async revokeTaskHandoff(context: RequestContext, handoffId: string, expectedVersion: number, execution?: { sourceRunId?: string; source?: "human" | "agent" }) {
+    requirePermission(context, "work_task:update");
+    const current = await this.repository.getHandoff(context.tenantId, handoffId);
+    if (!current) throw new Error("WORK_HANDOFF_NOT_FOUND");
+    const canRevoke = current.fromAssigneeId === context.actorId || current.initiatedBy === context.actorId || hasPermission(context, "work_task:admin");
+    if (!canRevoke) throw new Error("POLICY_DENIED:work_task:handoff_revoke");
+    const task = await this.requirePackage(context.tenantId, current.packageId);
+    if (current.status !== "pending") {
+      if (execution?.sourceRunId && current.responseRunId === execution.sourceRunId) return { handoff: current, task };
+      throw new Error("WORK_HANDOFF_NOT_PENDING");
+    }
+    if (task.version !== expectedVersion || task.version !== current.snapshot.packageVersion || task.assigneeId !== current.fromAssigneeId) throw new Error("WORK_HANDOFF_CHAIN_CHANGED");
+    const next = revokeTaskHandoff(current, { respondedBy: context.actorId, responseRunId: execution?.sourceRunId });
+    const changed = await this.repository.respondToHandoff({
+      current,
+      next,
+      currentPackage: task,
+      nextPackage: undefined,
+      expectedVersion,
+      event: event({
+        tenantId: context.tenantId,
+        missionId: task.missionId,
+        packageId: task.id,
+        eventType: "package_handoff_rejected",
+        actorId: context.actorId,
+        audience: "participants",
+        payload: { handoffId: current.id, fromAssigneeId: current.fromAssigneeId, toAssigneeId: current.toAssigneeId, decision: "revoke", packageVersion: task.version, artifactSnapshotCount: current.artifactSnapshots.length, legacyArtifactRefCount: current.artifactRefs.length },
+      }),
+    });
+    if (!changed) throw new Error("WORK_HANDOFF_CHAIN_CHANGED");
+    return { handoff: next, task };
   }
 
   async taskHandoffTrail(context: RequestContext, taskId: string) {

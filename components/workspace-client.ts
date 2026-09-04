@@ -16,7 +16,7 @@ export type TaskHandoff = {
   id: string; packageId: string; fromAssigneeId: string; toAssigneeId: string; note: string;
   currentProgress?: string; completedWork?: string; pendingWork?: string; attentionPoints?: string;
   artifactRefs: string[]; status: "pending" | "accepted" | "rejected";
-  responseNote?: string; createdAt: string; respondedAt?: string;
+  responseNote?: string; respondedBy?: string; createdAt: string; respondedAt?: string;
   snapshot: { packageVersion: number; title: string; description: string; acceptanceCriteria: string; evidenceRefs: string[]; dueAt: string };
 };
 export type TaskHandoffEntry = {

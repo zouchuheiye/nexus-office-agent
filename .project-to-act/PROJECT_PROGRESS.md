@@ -309,3 +309,5 @@
 - 2026-09-04：移除"我的"任务卡上的"开始"按钮（E-134）：assigned/claimed 状态不再显示一键开始按钮，卡片底部改显示相对截止时间；状态推进仍可经 Agent 或后续动作完成。验证：typecheck 0。
 
 - 2026-09-04：待交接改为双向可见（E-135）：服务端 `workspace.pendingHandoffs` 从"仅待我签收（to=我）"扩展为"待我签收 + 我发起待对方签收"，每条带 `direction: incoming|outgoing`；任务侧栏"待交接"列出两类，卡片对 incoming 保持 签收/退回 按钮，对 outgoing 显示"等对方签收"标记（前端用两张映射分离，不干扰原签收逻辑）；find_task / project_task_inventory 分类标注相应调整为 待签收/待对方签收。验证：typecheck 0；workspace 返回 3 条 outgoing（华东客服路由压测、门禁漂移验证2、AI产品经理项目）。说明：出向交接暂无"撤回"动作，属后续项。
+
+- 2026-09-04：撤回我发起的待签收交接（E-136）。服务端新增域函数 `revokeTaskHandoff`（发起人可撤回，状态 rejected + responseNote"发起人撤回交接" + respondedBy=发起人，无接收人限制）、`service.revokeTaskHandoff` 与 `POST /handoffs/[id]/revoke`；Agent 工具 `work.revoke_task_handoff`（confirmationPolicy always，生成待确认撤回提案）；前端 outgoing 卡片增加"撤回交接"按钮（window.confirm），交接链对 rejected && respondedBy=fromAssigneeId 显示"已撤回"而非"已退回"。验证：typecheck 0；服务层与 HTTP 路由分别撤回 5aa4c588（门禁漂移验证2）与 4015e5d6（华东客服路由压测）成功，状态 rejected、respondedBy=发起人，pending outgoing 由 3 降至 1（保留 AI产品经理项目交接作演示）；409 版本不符时正确拒绝。说明：撤回不改变任务负责人（继续留在原负责人）。
