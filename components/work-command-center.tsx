@@ -198,7 +198,7 @@ export function WorkCommandCenter({
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    const composing = Boolean((event.nativeEvent as KeyboardEvent & { isComposing?: boolean }).isComposing);
+    const composing = Boolean((event.nativeEvent as unknown as { isComposing?: boolean }).isComposing);
     if (event.key === "Enter" && !event.shiftKey && !composing) {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
