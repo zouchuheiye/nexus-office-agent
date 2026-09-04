@@ -224,6 +224,18 @@ export class AgentOrchestrator {
     const tool = this.tools.getByModelName(call.name);
     const policy = assertToolPolicy(context, tool);
     const toolInput = tool.inputSchema.parse(call.arguments);
+    // 发布类提案必须携带 projectId，否则确认/Worker 的版本漂移校验会整段跳过；
+    // 模型未填时从运行上下文（contextRefs）补上，避免项目版本变化漏检。
+    if (tool.id === "work.publish_task_bundle" && toolInput && typeof toolInput === "object" && !Array.isArray(toolInput)) {
+      const record = toolInput as Record<string, unknown>;
+      if (!record.projectId) {
+        const projectRef = (run.contextRefs ?? []).find((ref) => ref.startsWith("project:"));
+        const projectId = projectRef?.slice("project:".length);
+        if (projectId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)) {
+          record.projectId = projectId;
+        }
+      }
+    }
     if (policy.requiresConfirmation) {
       const proposal = createProposal({
         tenantId: context.tenantId, agentRunId: run.id, actorId: context.actorId,
