@@ -301,3 +301,5 @@
 - 2026-09-04：取消任务直接操作 + Agent 取消能力明确（E-130）。任务卡顶栏新增"取消"按钮（发布者/承接人视角、非模板、无待签收交接、状态 published/assigned/claimed/in_progress/blocked/in_review 可取消），点击 window.confirm 确认后经 transition 接口置 cancelled，保留审计；`work.update_my_task` 描述与 Agent 系统提示同步明确"取消/删除/清理重复任务=置 cancelled（无物理删除），重复先确认保留份"。验证：typecheck 0。说明：取消按钮与 Agent 两条路径共用同一状态机与服务校验。
 
 - 2026-09-04：取消按钮 UI 路径实测（E-131）：headless Edge 打开工作台定位"华东监控告警值班-公开承接测试"卡片 → 点击"取消"→ confirm 弹窗文案正确并接受 → 任务包 93979b1d 状态变为 cancelled（v3），截图 flow-shots/05-cancel-ui.png。验证完成。
+
+- 2026-09-04：Agent 取消任务强制人工确认（E-132）。新增 `work.cancel_task`（confirmationPolicy: always，只生成待人工确认的取消提案，确认后由 Worker 执行置 cancelled，保留审计）；`work.update_my_task` 移除取消用途（描述、JSON schema 与 zod refine 均拒绝 nextStatus=cancelled，防止绕过取消确认）；Agent 系统提示规定取消/删除/清理重复一律走 work.cancel_task。验证：typecheck 0。说明：部署/测试需重启 Worker 加载新工具。

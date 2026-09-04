@@ -4,7 +4,7 @@ import type { TaskCommandService } from "@/src/modules/task-command/application/
 import { ToolRegistry } from "@/src/modules/agent/domain/tool";
 
 const claimSchema = z.object({ taskId: z.uuid(), expectedVersion: z.number().int().positive() }).strict();
-const updateSchema = transitionPackageSchema.extend({ taskId: z.uuid() }).strict();
+const updateSchema = transitionPackageSchema.extend({ taskId: z.uuid() }).strict().refine((value) => value.nextStatus !== "cancelled", { message: "取消任务请使用 work.cancel_task" });
 const respondHandoffSchema = respondToTaskHandoffSchema.extend({ handoffId: z.uuid() }).strict();
 const taskFactSchema = z.object({ taskId: z.uuid() }).strict();
 
@@ -79,17 +79,27 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
   });
   registry.register({
     id: "work.update_my_task", skillId: "work-orchestration", version: 1,
-    description: "推进当前用户负责或发布的任务包状态；完成时必须给出可核验的证据引用，阻塞时必须说明原因。用户要求取消/删除任务或清理重复任务时，用本工具把目标任务包置为 cancelled（物理删除不存在，取消保留审计记录）。",
+    description: "推进当前用户负责或发布的任务包状态（不含取消）：开始、阻塞、提交验收、完成；完成时必须给出可核验的证据引用，阻塞时必须说明原因。取消任务请使用 work.cancel_task。",
     requiredPermissions: ["work_task:update"], riskLevel: 2, confirmationPolicy: "risk_based", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 3,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
     inputJsonSchema: { type: "object", additionalProperties: false, properties: {
       taskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 },
-      nextStatus: { type: "string", enum: ["in_progress", "blocked", "in_review", "completed", "cancelled"] },
+      nextStatus: { type: "string", enum: ["in_progress", "blocked", "in_review", "completed"] },
       evidenceRefs: { type: "array", items: { type: "string" } }, blockedReason: { type: "string" },
     }, required: ["taskId", "expectedVersion", "nextStatus"] },
     inputSchema: updateSchema,
     preview(input) { const value = updateSchema.parse(input); return `将任务包 ${value.taskId} 推进为 ${value.nextStatus}。`; },
     execute(context, input) { const value = updateSchema.parse(input); const { taskId, ...transition } = value; return service.transitionPackage(context, taskId, transition); },
+  });
+  registry.register({
+    id: "work.cancel_task", skillId: "work-orchestration", version: 1,
+    description: "取消（置为 cancelled）当前用户负责或发布的任务包，仅用于用户明确要求取消/删除任务或清理重复任务时。本操作不可逆（保留审计），调用前必须先经用户确认目标任务；调用本工具生成待人工确认的提案，确认后才执行。物理删除不存在。",
+    requiredPermissions: ["work_task:update"], riskLevel: 2, confirmationPolicy: "always", sideEffect: "internal_idempotent", timeoutMs: 15_000, maxAttempts: 3,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { taskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 } }, required: ["taskId", "expectedVersion"] },
+    inputSchema: z.object({ taskId: z.uuid(), expectedVersion: z.number().int().positive() }).strict(),
+    preview(input) { const value = z.object({ taskId: z.uuid(), expectedVersion: z.number().int().positive() }).strict().parse(input); return `将取消任务包 ${value.taskId}（版本 ${value.expectedVersion}），取消后不可恢复并保留审计。`; },
+    execute(context, input) { const value = z.object({ taskId: z.uuid(), expectedVersion: z.number().int().positive() }).strict().parse(input); return service.transitionPackage(context, value.taskId, { expectedVersion: value.expectedVersion, nextStatus: "cancelled" }); },
   });
   registry.register({
     id: "work.initiate_task_handoff", skillId: "work-orchestration", version: 1,
