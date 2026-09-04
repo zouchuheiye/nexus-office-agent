@@ -293,3 +293,5 @@
 - 2026-09-04：输入提示文案由"Ctrl / ⌘ + Enter 发送"改为"Ctrl + Enter 发送"（E-126）。验证：typecheck 0。
 
 - 2026-09-04：发送键位改为 Enter 发送 / Shift + Enter 换行（E-127）：`handleComposerKeyDown` 在非组合输入（isComposing）且非 Shift 时回车即 `requestSubmit`，Shift+Enter 保留默认换行；提示文案同步为"Enter 发送 · Shift + Enter 换行"。验证：typecheck 0。
+
+- 2026-09-04：移除输入区安全提示小字"只使用当前账号有权访问的数据和能力"（E-128），保留右侧发送键位提示。仅 UI 文案删除，鉴权逻辑不变。验证：typecheck 0。
