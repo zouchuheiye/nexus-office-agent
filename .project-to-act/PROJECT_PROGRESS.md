@@ -295,3 +295,5 @@
 - 2026-09-04：发送键位改为 Enter 发送 / Shift + Enter 换行（E-127）：`handleComposerKeyDown` 在非组合输入（isComposing）且非 Shift 时回车即 `requestSubmit`，Shift+Enter 保留默认换行；提示文案同步为"Enter 发送 · Shift + Enter 换行"。验证：typecheck 0。
 
 - 2026-09-04：移除输入区安全提示小字"只使用当前账号有权访问的数据和能力"（E-128），保留右侧发送键位提示。仅 UI 文案删除，鉴权逻辑不变。验证：typecheck 0。
+
+- 2026-09-04：清理重复任务（E-129）。Agent 核验确认两对重复（门禁漂移验证2：dd945937/f4150c4c；AI产品经理项目：04c7f2b3/c4f57d1c），但工具目录无删除能力且需模型调用状态工具。直接以管理员身份将多余份标记 cancelled（保留 f4150c4c、c4f57d1c），两对各剩一份 published 且保留审计链（cancelled v2）。说明：用户侧首次"取消"失败原因=模型网关返回"暂时不可用"导致工具未执行；模型网关对瞬时网络错误有最多 3 次退避重试，但对话 run 无自动重跑（需重发），Worker 作业才有租约重试/死信。遗留：任务卡无"取消/删除"直接操作按钮，需经 Agent 或 API；物理删除未提供（当前用 cancelled 保留可追溯）。
