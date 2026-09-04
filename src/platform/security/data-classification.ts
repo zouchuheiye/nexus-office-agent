@@ -29,10 +29,9 @@ export function classificationAtMost(value: DataClassification, maximum: DataCla
 }
 
 export function hasSensitiveContent(value: string): boolean {
-  // UUIDs (any version/variant) are opaque object identifiers throughout the platform.
-  // They resemble hyphenated card numbers to the broad numeric detector but do not
-  // constitute sensitive content by themselves.
-  const normalized = value.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "[uuid]");
+  // Hyphenated hex identifiers (UUIDs, org/object ids, including summaries that
+  // truncate a trailing segment) are opaque identifiers, not card numbers.
+  const normalized = value.replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{1,12}){1,4}\b/gi, "[id]");
   return sensitivePatterns.some((pattern) => pattern.test(normalized));
 }
 
