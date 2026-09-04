@@ -2,21 +2,17 @@
 
 import {
   ArrowRight,
-  BarChart3,
   Bot,
-  CalendarDays,
   Check,
   CircleAlert,
   CircleDashed,
   FileCheck2,
-  FolderKanban,
   ListTodo,
   LoaderCircle,
   MessageCircle,
   Plus,
   Radio,
   RotateCcw,
-  Search,
   Send,
   ShieldCheck,
   Sparkles,
@@ -54,16 +50,6 @@ const timelineEventCopy: Record<string, string> = {
 };
 function dueLabel(task: Task): string { return dueCopy[task.dueState ?? "normal"]; }
 function dueRank(task: Task): number { return task.dueState === "overdue" ? 0 : task.dueState === "due_soon" ? 1 : task.dueState === "done" ? 3 : 2; }
-const officeShortcuts = [
-  { label: "任务", icon: ListTodo, prompt: "帮我处理一项任务。先理解目标、时限、相关人员和已有交接链，再决定是直接回答、拆分、分派、承接还是正式交接。" },
-  { label: "消息", icon: MessageCircle, prompt: "我需要发一条沟通消息。请先判断它是否只是同步、征询或反馈；若不产生责任人、截止时间和验收，请放入合适的公司或部门消息池。" },
-  { label: "审批", icon: FileCheck2, prompt: "我需要处理一项审批，请先询问必要信息，再根据当前权限和流程继续。" },
-  { label: "项目", icon: FolderKanban, prompt: "帮我查看或推进一个项目。请先确认项目和我想完成的事情。" },
-  { label: "会议", icon: CalendarDays, prompt: "帮我准备或跟进一场会议，请先确认会议主题、参与人和目标。" },
-  { label: "知识", icon: Search, prompt: "帮我从已授权的企业知识中查找信息，并给出可核验引用。" },
-  { label: "经营", icon: BarChart3, prompt: "帮我分析一个经营问题，严格区分事实、推断和建议。" },
-] as const;
-
 export function WorkCommandCenter({
   messages,
   query,
@@ -232,7 +218,6 @@ export function WorkCommandCenter({
           <div ref={conversationEnd} />
         </div>
 
-        <div className="command-suggestions" aria-label="常用办公入口">{officeShortcuts.map(({ label, prompt, icon: Icon }) => <button type="button" key={label} onClick={() => onQueryChange(prompt)}><Icon size={15} />{label}</button>)}</div>
         <form className="primary-composer" onSubmit={onSubmit}>
           <label htmlFor="primary-work-command">说说你要处理什么</label>
           <textarea id="primary-work-command" value={query} onChange={(event) => onQueryChange(event.target.value)} onKeyDown={handleComposerKeyDown} rows={6} placeholder="输入一件要处理的事…" />
@@ -241,7 +226,7 @@ export function WorkCommandCenter({
       </section>
 
       <aside className="live-task-rail">
-        <header><div><h2>{railMode === "tasks" ? "任务" : "消息池"}</h2><p>{workspace ? `已同步 · ${formatTime(workspace.generatedAt)}` : "正在同步"}</p></div><div className="task-rail-actions"><button className="task-publish-action" type="button" onClick={() => onQueryChange(railMode === "tasks" ? "发布一项任务：\n任务名称：\n接收对象（个人或部门）：\n目标：\n截止时间：\n验收标准（例：提供测试报告并通过回归；交付可运行产物和使用说明）：\n分派方式（例：直接分派给张三 / 研发中心开放承接）：" : "我需要推送一条沟通消息。请理解内容后放入当前可见的合适消息池；这不是任务，不需要负责人、截止时间或验收。") }><Plus size={14} />{railMode === "tasks" ? "发布任务" : "推送"}</button><button type="button" onClick={() => void loadWorkspace()} aria-label="刷新工作区"><RotateCcw className={loading ? "spin" : ""} size={15} /></button></div></header>
+        <header><div><h2>{railMode === "tasks" ? "任务" : "消息池"}</h2><p>{workspace ? `已同步 · ${formatTime(workspace.generatedAt)}` : "正在同步"}</p></div><div className="task-rail-actions"><button className="task-publish-action" type="button" onClick={() => onQueryChange(railMode === "tasks" ? "发布一项任务" : "推送一条沟通消息")}><Plus size={14} />{railMode === "tasks" ? "发布任务" : "推送"}</button><button type="button" onClick={() => void loadWorkspace()} aria-label="刷新工作区"><RotateCcw className={loading ? "spin" : ""} size={15} /></button></div></header>
         <div className="task-rail-tabs task-rail-mode-tabs" role="tablist" aria-label="工作上下文">
           <button type="button" role="tab" aria-selected={railMode === "tasks"} className={railMode === "tasks" ? "active" : ""} onClick={() => setRailMode("tasks")}><ListTodo size={14} />任务 <b>{(workspace?.myTasks.length ?? 0) + (workspace?.availableTasks.length ?? 0)}</b></button>
           <button type="button" role="tab" aria-selected={railMode === "messages"} className={railMode === "messages" ? "active" : ""} onClick={() => setRailMode("messages")}><MessageCircle size={14} />消息 <b>{messageCount}</b></button>
