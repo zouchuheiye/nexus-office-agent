@@ -142,7 +142,7 @@ export class TaskCommandService {
       const missing = new Set<WorkTemplateField>();
       if (!item.description?.trim()) missing.add("任务说明");
       if (!item.acceptanceCriteria?.trim()) missing.add("验收标准");
-      if (!item.requiredSkills.length) missing.add("所需技能");
+      if (!item.requiredSkills || !item.requiredSkills.length) missing.add("所需技能");
       if (!item.priority) missing.add("优先级");
       if (!item.dueAt) missing.add("截止时间");
       if (!item.startedAt) missing.add("任务开始时间");
@@ -154,7 +154,7 @@ export class TaskCommandService {
         ...item,
         description: item.description?.trim() || "待补充任务说明",
         acceptanceCriteria: item.acceptanceCriteria?.trim() || "待补充验收标准",
-        requiredSkills: [...new Set(item.requiredSkills)],
+        requiredSkills: [...new Set(item.requiredSkills ?? [])],
         assignmentMode,
         priority: item.priority ?? "medium",
         dueAt: item.dueAt ?? missionDueAt,

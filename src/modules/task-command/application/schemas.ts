@@ -16,7 +16,7 @@ export const publishMissionSchema = z.object({
     title: z.string().trim().min(2).max(160),
     description: z.string().trim().min(2).max(1200).optional(),
     acceptanceCriteria: z.string().trim().min(2).max(800).optional(),
-    requiredSkills: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+    requiredSkills: z.array(z.string().trim().min(1).max(80)).max(12).optional().default([]),
     assignmentMode: z.enum(["direct", "open_claim"]).optional(),
     assigneeId: z.uuid().optional(),
     targetOrgUnitId: z.uuid().optional(),
