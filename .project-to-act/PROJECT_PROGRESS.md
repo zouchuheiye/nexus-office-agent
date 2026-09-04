@@ -303,3 +303,5 @@
 - 2026-09-04：取消按钮 UI 路径实测（E-131）：headless Edge 打开工作台定位"华东监控告警值班-公开承接测试"卡片 → 点击"取消"→ confirm 弹窗文案正确并接受 → 任务包 93979b1d 状态变为 cancelled（v3），截图 flow-shots/05-cancel-ui.png。验证完成。
 
 - 2026-09-04：Agent 取消任务强制人工确认（E-132）。新增 `work.cancel_task`（confirmationPolicy: always，只生成待人工确认的取消提案，确认后由 Worker 执行置 cancelled，保留审计）；`work.update_my_task` 移除取消用途（描述、JSON schema 与 zod refine 均拒绝 nextStatus=cancelled，防止绕过取消确认）；Agent 系统提示规定取消/删除/清理重复一律走 work.cancel_task。验证：typecheck 0。说明：部署/测试需重启 Worker 加载新工具。
+
+- 2026-09-04：Agent 取消确认提案实测（E-133）：重启 Worker（含 work.cancel_task）后让 Agent"取消任务 AI产品经理项目 c4f57d1c"，输出 kind=proposal / status=awaiting_confirmation，tools=work.cancel_task，提案预览"将取消任务包…取消后不可恢复并保留审计"，未直接执行；测试提案已清理，任务保留。验证完成。
