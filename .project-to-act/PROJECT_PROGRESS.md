@@ -313,3 +313,5 @@
 - 2026-09-04：撤回我发起的待签收交接（E-136）。服务端新增域函数 `revokeTaskHandoff`（发起人可撤回，状态 rejected + responseNote"发起人撤回交接" + respondedBy=发起人，无接收人限制）、`service.revokeTaskHandoff` 与 `POST /handoffs/[id]/revoke`；Agent 工具 `work.revoke_task_handoff`（confirmationPolicy always，生成待确认撤回提案）；前端 outgoing 卡片增加"撤回交接"按钮（window.confirm），交接链对 rejected && respondedBy=fromAssigneeId 显示"已撤回"而非"已退回"。验证：typecheck 0；服务层与 HTTP 路由分别撤回 5aa4c588（门禁漂移验证2）与 4015e5d6（华东客服路由压测）成功，状态 rejected、respondedBy=发起人，pending outgoing 由 3 降至 1（保留 AI产品经理项目交接作演示）；409 版本不符时正确拒绝。说明：撤回不改变任务负责人（继续留在原负责人）。
 
 - 2026-09-04：待签收交接改为直接签收/退回（E-137）：incoming 卡片的"签收/退回"不再往输入框注入让 Agent 代劳的提示词，改为直接调用 `POST /handoffs/[id]/response`——签收走 window.confirm，退回用 window.prompt 要求至少 4 字原因；成功后刷新并提示。验证：typecheck 0；签收/退回均不再依赖模型网关。说明：Agent 侧仍可用 work.respond_to_task_handoff（带确认提案），两条路径并存。
+
+- 2026-09-04：交接中状态明示（E-138）：任务卡顶栏对存在未完成出向交接的任务显示"正在交接中 · 等待 XX 确认"（在"我的"也可见，不再只靠隐藏按钮让人困惑）；"待交接"标签内仍显示"等对方签收"。验证：typecheck 0。
