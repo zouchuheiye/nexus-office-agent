@@ -305,3 +305,5 @@
 - 2026-09-04：Agent 取消任务强制人工确认（E-132）。新增 `work.cancel_task`（confirmationPolicy: always，只生成待人工确认的取消提案，确认后由 Worker 执行置 cancelled，保留审计）；`work.update_my_task` 移除取消用途（描述、JSON schema 与 zod refine 均拒绝 nextStatus=cancelled，防止绕过取消确认）；Agent 系统提示规定取消/删除/清理重复一律走 work.cancel_task。验证：typecheck 0。说明：部署/测试需重启 Worker 加载新工具。
 
 - 2026-09-04：Agent 取消确认提案实测（E-133）：重启 Worker（含 work.cancel_task）后让 Agent"取消任务 AI产品经理项目 c4f57d1c"，输出 kind=proposal / status=awaiting_confirmation，tools=work.cancel_task，提案预览"将取消任务包…取消后不可恢复并保留审计"，未直接执行；测试提案已清理，任务保留。验证完成。
+
+- 2026-09-04：移除"我的"任务卡上的"开始"按钮（E-134）：assigned/claimed 状态不再显示一键开始按钮，卡片底部改显示相对截止时间；状态推进仍可经 Agent 或后续动作完成。验证：typecheck 0。
