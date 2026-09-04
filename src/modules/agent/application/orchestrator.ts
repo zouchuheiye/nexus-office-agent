@@ -151,6 +151,7 @@ export class AgentOrchestrator {
       let lastResponse: ModelResponse | null = null;
       let callCount = 0;
       let outboundClassification: DataClassification = contextPackage.dataClassification;
+      let modelPolicyDenied = false;
 
       try {
         for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
@@ -188,6 +189,7 @@ export class AgentOrchestrator {
       } catch (error) {
         if (!isModelFailure(error)) throw error;
         if (error instanceof Error && error.message === "MODEL_POLICY_DENIED") {
+          modelPolicyDenied = true;
           lastResponse = { content: JSON.stringify({ answer: "当前读取结果包含受限信息，系统未将其继续发送给模型。请使用企业受控的敏感数据流程处理。" }), provider: usage.provider || "policy", model: usage.model || "policy-denied", inputTokens: 0, outputTokens: 0, latencyMs: 0 };
         } else if (usedTools.length) {
           lastResponse = { content: JSON.stringify({ answer: `工具已执行：${usedTools.join("、")}。业务结果已经写入并可在任务栏核验。` }), provider: usage.provider || "unavailable", model: usage.model || "unavailable", inputTokens: 0, outputTokens: 0, latencyMs: 0 };
@@ -204,7 +206,7 @@ export class AgentOrchestrator {
         status: "succeeded",
         completedAt: new Date().toISOString(),
         output: {
-          kind: usedTools.length ? "execution" : "answer",
+          kind: modelPolicyDenied ? "refusal" : usedTools.length ? "execution" : "answer",
           content: parsed.answer,
           citations: contextPackage.citations,
           routing: { skills: parsed.skills, tools: usedTools },
