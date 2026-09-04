@@ -287,3 +287,5 @@
 - 2026-09-04：工具执行后的确定性汇总兜底（E-123）。`orchestrator.ts` 记录每个已执行非提案工具的返回（executedResults），模型第二轮失败且已执行工具时，不再返回"工具已执行…可在任务栏核验"空话，而是由 `formatExecutedSummary` 把 work.find_task 等返回的 tasks 去重过滤（排除 completed/cancelled/模板）后直接拼成按状态分类的清单。验证：typecheck 0；复现原问题提问"列出智能客服 2.0 华东上线项目里尚未完成的任务"，模型第二轮仍失败但输出已变成可读清单（华东上线联调支持·已分派、华东监控告警值班·已承接、华东客服路由压测·已承接，含所在分类）；tools=work.find_task×4 + office.read_governance_workspace。说明：清单覆盖范围取决于模型实际发起的检索关键词；完整项目盘点应引导走任务进度看板/work.get_task_progress（遗留：为"项目全部未完成任务"提供无关键词的全量只读工具待排期）。
 
 - 2026-09-04：项目任务全量盘点只读工具（E-124）。新增 `work.project_task_inventory` 与 `service.projectTaskInventory`：按 projectId 一次返回当前用户可见的全部任务（含状态、所在分类、使命标题、dueState、模板/待补充标记、负责人），不依赖关键词；Agent 系统提示规定"列出某项目全部/未完成任务或盘点时优先一次调用本工具，不要用 find_task 多关键词猜测"。确定性兜底 `formatExecutedSummary` 对返回的 tasks 同样生效。验证：typecheck 0；原问题复测 Agent 路由含 work.project_task_inventory，输出项目 8 项未完成任务完整清单并按 可承接/已分派/已承接/进行中 归类（含截止、逾期、负责人、待补充字段与测试类任务提示）；模型本轮正常产出汇总。遗留：测试类脏任务（门禁漂移验证2×2 等）归属清晰性待后续核对/清理。
+
+- 2026-09-04：移除输入框上方可见小字"说说你要处理什么"（E-125）：删除 `<label>` 可见文本，改以 textarea `aria-label` 保留无障碍名称，placeholder 维持"输入一件要处理的事…"。验证：typecheck 0。
