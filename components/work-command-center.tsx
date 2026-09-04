@@ -10,7 +10,6 @@ import {
   ListTodo,
   LoaderCircle,
   MessageCircle,
-  Plus,
   Radio,
   RotateCcw,
   Send,
@@ -198,7 +197,7 @@ export function WorkCommandCenter({
       <section className="primary-conversation-panel">
         <div className="conversation-toolbar">
           <div><span className="command-agent-mark"><Sparkles size={16} /></span><div><strong>枢纽 Agent</strong><small><i /> 企业办公入口</small></div></div>
-          <div className="conversation-guard"><span><ShieldCheck size={14} />权限已同步</span><button type="button" onClick={() => onQueryChange("我想处理一件新的办公事项，请先询问必要信息。") }><Plus size={14} />新事项</button></div>
+          <div className="conversation-guard"><span><ShieldCheck size={14} />权限已同步</span></div>
         </div>
 
         <div className="command-conversation" aria-live="polite">
@@ -226,7 +225,7 @@ export function WorkCommandCenter({
       </section>
 
       <aside className="live-task-rail">
-        <header><div><h2>{railMode === "tasks" ? "任务" : "消息池"}</h2><p>{workspace ? `已同步 · ${formatTime(workspace.generatedAt)}` : "正在同步"}</p></div><div className="task-rail-actions"><button className="task-publish-action" type="button" onClick={() => onQueryChange(railMode === "tasks" ? "发布一项任务" : "推送一条沟通消息")}><Plus size={14} />{railMode === "tasks" ? "发布任务" : "推送"}</button><button type="button" onClick={() => void loadWorkspace()} aria-label="刷新工作区"><RotateCcw className={loading ? "spin" : ""} size={15} /></button></div></header>
+        <header><div><h2>{railMode === "tasks" ? "任务" : "消息池"}</h2><p>{workspace ? `已同步 · ${formatTime(workspace.generatedAt)}` : "正在同步"}</p></div><div className="task-rail-actions"><button type="button" onClick={() => void loadWorkspace()} aria-label="刷新工作区"><RotateCcw className={loading ? "spin" : ""} size={15} /></button></div></header>
         <div className="task-rail-tabs task-rail-mode-tabs" role="tablist" aria-label="工作上下文">
           <button type="button" role="tab" aria-selected={railMode === "tasks"} className={railMode === "tasks" ? "active" : ""} onClick={() => setRailMode("tasks")}><ListTodo size={14} />任务 <b>{(workspace?.myTasks.length ?? 0) + (workspace?.availableTasks.length ?? 0)}</b></button>
           <button type="button" role="tab" aria-selected={railMode === "messages"} className={railMode === "messages" ? "active" : ""} onClick={() => setRailMode("messages")}><MessageCircle size={14} />消息 <b>{messageCount}</b></button>
