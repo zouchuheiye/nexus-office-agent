@@ -231,7 +231,7 @@ export function WorkCommandCenter({
 
         <form className="primary-composer" onSubmit={onSubmit}>
           <textarea id="primary-work-command" aria-label="说说你要处理什么" value={query} onChange={(event) => onQueryChange(event.target.value)} onKeyDown={handleComposerKeyDown} rows={6} placeholder="输入一件要处理的事…" />
-          <footer><div><span><ShieldCheck size={13} />只使用当前账号有权访问的数据和能力</span><small>Ctrl / ⌘ + Enter 发送</small></div><button type="submit" aria-label="发送" disabled={!query.trim() || isThinking}>{isThinking ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}</button></footer>
+          <footer><div><span><ShieldCheck size={13} />只使用当前账号有权访问的数据和能力</span><small>Ctrl + Enter 发送</small></div><button type="submit" aria-label="发送" disabled={!query.trim() || isThinking}>{isThinking ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}</button></footer>
         </form>
       </section>
 

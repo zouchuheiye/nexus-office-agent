@@ -289,3 +289,5 @@
 - 2026-09-04：项目任务全量盘点只读工具（E-124）。新增 `work.project_task_inventory` 与 `service.projectTaskInventory`：按 projectId 一次返回当前用户可见的全部任务（含状态、所在分类、使命标题、dueState、模板/待补充标记、负责人），不依赖关键词；Agent 系统提示规定"列出某项目全部/未完成任务或盘点时优先一次调用本工具，不要用 find_task 多关键词猜测"。确定性兜底 `formatExecutedSummary` 对返回的 tasks 同样生效。验证：typecheck 0；原问题复测 Agent 路由含 work.project_task_inventory，输出项目 8 项未完成任务完整清单并按 可承接/已分派/已承接/进行中 归类（含截止、逾期、负责人、待补充字段与测试类任务提示）；模型本轮正常产出汇总。遗留：测试类脏任务（门禁漂移验证2×2 等）归属清晰性待后续核对/清理。
 
 - 2026-09-04：移除输入框上方可见小字"说说你要处理什么"（E-125）：删除 `<label>` 可见文本，改以 textarea `aria-label` 保留无障碍名称，placeholder 维持"输入一件要处理的事…"。验证：typecheck 0。
+
+- 2026-09-04：输入提示文案由"Ctrl / ⌘ + Enter 发送"改为"Ctrl + Enter 发送"（E-126）。验证：typecheck 0。
