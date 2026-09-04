@@ -175,6 +175,9 @@ export function WorkCommandCenter({
   }, [workspace]);
   const pendingHandoffsByTask = useMemo(() => new Map(workspace?.pendingHandoffs.map(({ task, handoff }) => [task.id, handoff]) ?? []), [workspace]);
   const messageCount = useMemo(() => workspace?.messagePools.reduce((total, pool) => total + pool.messages.length, 0) ?? 0, [workspace]);
+  const cancellableStatuses = new Set<Task["status"]>(["published", "assigned", "claimed", "in_progress", "blocked", "in_review"]);
+  const hasPendingHandoff = (taskId: string) => (handoffsByPackage.get(taskId) ?? []).some((handoff) => handoff.status === "pending");
+  const canCancelTask = (task: Task) => !task.isTemplate && cancellableStatuses.has(task.status) && (taskMode === "published" || taskMode === "mine") && !hasPendingHandoff(task.id);
 
   async function claim(task: Task) {
     setBusyTask(task.id);
@@ -195,6 +198,11 @@ export function WorkCommandCenter({
       await loadWorkspace();
     } catch (cause) { onNotice(cause instanceof Error ? cause.message : "任务推进失败"); }
     finally { setBusyTask(""); }
+  }
+
+  async function cancelTask(task: Task) {
+    if (!window.confirm(`确认取消任务「${task.title}」？取消后保留审计记录，任务不可恢复。`)) return;
+    await transition(task, "cancelled");
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -256,7 +264,7 @@ export function WorkCommandCenter({
             const prevDue = index > 0 ? sortedTasks[index - 1].dueState ?? "normal" : null;
             const showDueHeader = (taskMode === "mine" || taskMode === "published") && (task.dueState ?? "normal") !== prevDue;
             return <div className="task-rail-group" key={task.id}>{showDueHeader ? <div className="task-due-group-label">{dueLabel(task)} · {sortedTasks.filter((item) => (item.dueState ?? "normal") === (task.dueState ?? "normal")).length}</div> : null}<article className={`task-dispatch-card is-${task.status}${task.isTemplate ? " is-template" : ""}`}>
-            <div className="task-dispatch-top"><span className={`task-priority is-${task.priority}`}>{task.isTemplate ? "模板" : priorityCopy[task.priority]}</span>{!task.isTemplate && task.dueState && ["overdue", "due_soon"].includes(task.dueState) ? <span className={`task-due is-${task.dueState}`}>{dueLabel(task)}</span> : null}<span className="task-state"><i />{task.isTemplate ? "待补充" : statusCopy[task.status]}</span></div>
+            <div className="task-dispatch-top"><span className={`task-priority is-${task.priority}`}>{task.isTemplate ? "模板" : priorityCopy[task.priority]}</span>{!task.isTemplate && task.dueState && ["overdue", "due_soon"].includes(task.dueState) ? <span className={`task-due is-${task.dueState}`}>{dueLabel(task)}</span> : null}<span className="task-state"><i />{task.isTemplate ? "待补充" : statusCopy[task.status]}</span>{canCancelTask(task) ? <button className="task-cancel-action" type="button" disabled={busyTask === task.id} onClick={() => void cancelTask(task)}>{busyTask === task.id ? "取消中…" : "取消"}</button> : null}</div>
             <h3>{task.title}</h3><p>{task.description}</p>
             <dl><div><dt>接收对象</dt><dd>{task.assigneeId ? peopleById.get(task.assigneeId)?.displayName ?? "已指派成员" : task.targetOrgUnitId ? `${orgUnitsById.get(task.targetOrgUnitId)?.name ?? "指定部门"}待承接` : "公司公开承接"}</dd></div>{task.startedAt ? <div><dt>开始</dt><dd>{formatDate(task.startedAt)}</dd></div> : null}<div><dt>截止</dt><dd>{formatDate(task.dueAt)}{task.dueState === "overdue" ? " · 已逾期" : task.dueState === "due_soon" ? " · 临期" : ""}</dd></div>{task.estimatedDays ? <div><dt>工期</dt><dd>{task.estimatedDays} 天</dd></div> : null}</dl>
             <details className="task-acceptance"><summary>验收标准</summary><p>{task.acceptanceCriteria}</p></details>

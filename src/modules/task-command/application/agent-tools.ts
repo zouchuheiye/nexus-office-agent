@@ -79,7 +79,7 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
   });
   registry.register({
     id: "work.update_my_task", skillId: "work-orchestration", version: 1,
-    description: "推进当前用户负责或发布的任务包状态；完成时必须给出可核验的证据引用，阻塞时必须说明原因。",
+    description: "推进当前用户负责或发布的任务包状态；完成时必须给出可核验的证据引用，阻塞时必须说明原因。用户要求取消/删除任务或清理重复任务时，用本工具把目标任务包置为 cancelled（物理删除不存在，取消保留审计记录）。",
     requiredPermissions: ["work_task:update"], riskLevel: 2, confirmationPolicy: "risk_based", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 3,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
     inputJsonSchema: { type: "object", additionalProperties: false, properties: {

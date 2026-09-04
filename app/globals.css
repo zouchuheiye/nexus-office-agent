@@ -2003,3 +2003,17 @@ kbd { display: inline-flex; align-items: center; gap: 2px; padding: 3px 5px; col
   .mt-filters { width: 100%; overflow-x: auto; }
   .mt-filters button { flex: 0 0 auto; }
 }
+
+.task-cancel-action {
+  margin-left: auto;
+  border: 1px solid color-mix(in srgb, #d64545 40%, transparent);
+  color: #d64545;
+  background: transparent;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.task-cancel-action:hover { background: color-mix(in srgb, #d64545 10%, transparent); }
+.task-cancel-action:disabled { opacity: .55; cursor: default; }
