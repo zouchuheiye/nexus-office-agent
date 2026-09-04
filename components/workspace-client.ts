@@ -53,16 +53,17 @@ export function useWorkspace(refreshMs = 30_000) {
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "任务工作区加载失败");
+      throw cause instanceof Error ? cause : new Error("任务工作区加载失败");
     } finally {
       setLoading(false);
     }
   }, []);
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
+    const timer = window.setTimeout(() => void load().catch(() => undefined), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
   useEffect(() => {
-    const timer = window.setInterval(() => void load(), refreshMs);
+    const timer = window.setInterval(() => void load().catch(() => undefined), refreshMs);
     return () => window.clearInterval(timer);
   }, [load, refreshMs]);
   return { workspace, loading, error, load };

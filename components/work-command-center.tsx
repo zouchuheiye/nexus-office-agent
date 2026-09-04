@@ -74,6 +74,7 @@ export function WorkCommandCenter({
   const [taskMode, setTaskMode] = useState<"mine" | "available" | "published" | "handoffs">("mine");
   const [railMode, setRailMode] = useState<"tasks" | "messages">("tasks");
   const [busyTask, setBusyTask] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const hydrated = useRef(false);
   const conversationEnd = useRef<HTMLDivElement>(null);
   const didInitialJump = useRef(false);
@@ -81,6 +82,17 @@ export function WorkCommandCenter({
   const handledCountRef = useRef(0); // last message count we already positioned
 
   const [timelines, setTimelines] = useState<Record<string, TimelineEvent[]>>({});
+  const refreshWorkspace = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadWorkspace();
+      onNotice(`已刷新 · ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date())}`);
+    } catch {
+      onNotice("刷新失败，请稍后重试");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadWorkspace, onNotice]);
   const loadTimeline = useCallback(async (taskId: string) => {
     if (timelines[taskId]) return;
     try {
@@ -98,13 +110,13 @@ export function WorkCommandCenter({
   }, [workspace, onHydrate]);
   useEffect(() => {
     const stream = new EventSource("/api/v1/task-command/message-events");
-    const refresh = () => void loadWorkspace();
+    const refresh = () => void loadWorkspace().catch(() => undefined);
     stream.addEventListener("message-change", refresh);
     return () => stream.close();
   }, [loadWorkspace]);
   useEffect(() => {
     const stream = new EventSource("/api/v1/task-command/events");
-    const refresh = () => void loadWorkspace();
+    const refresh = () => void loadWorkspace().catch(() => undefined);
     stream.addEventListener("task-change", refresh);
     window.addEventListener("nexus:task-command-changed", refresh);
     return () => { stream.close(); window.removeEventListener("nexus:task-command-changed", refresh); };
@@ -225,7 +237,7 @@ export function WorkCommandCenter({
       </section>
 
       <aside className="live-task-rail">
-        <header><div><h2>{railMode === "tasks" ? "任务" : "消息池"}</h2><p>{workspace ? `已同步 · ${formatTime(workspace.generatedAt)}` : "正在同步"}</p></div><div className="task-rail-actions"><button type="button" onClick={() => void loadWorkspace()} aria-label="刷新工作区"><RotateCcw className={loading ? "spin" : ""} size={15} /></button></div></header>
+        <header><div><h2>{railMode === "tasks" ? "任务" : "消息池"}</h2><p>{workspace ? `已同步 · ${formatTime(workspace.generatedAt)}` : "正在同步"}</p></div><div className="task-rail-actions"><button type="button" onClick={() => void refreshWorkspace()} disabled={refreshing} aria-label="刷新工作区"><RotateCcw className={refreshing ? "spin" : ""} size={15} /></button></div></header>
         <div className="task-rail-tabs task-rail-mode-tabs" role="tablist" aria-label="工作上下文">
           <button type="button" role="tab" aria-selected={railMode === "tasks"} className={railMode === "tasks" ? "active" : ""} onClick={() => setRailMode("tasks")}><ListTodo size={14} />任务 <b>{(workspace?.myTasks.length ?? 0) + (workspace?.availableTasks.length ?? 0)}</b></button>
           <button type="button" role="tab" aria-selected={railMode === "messages"} className={railMode === "messages" ? "active" : ""} onClick={() => setRailMode("messages")}><MessageCircle size={14} />消息 <b>{messageCount}</b></button>
