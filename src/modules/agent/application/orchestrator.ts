@@ -22,6 +22,55 @@ const SYSTEM_PROMPT = `你是企业统一办公平台的主 Agent。你必须基
 const MAX_TOOL_ROUNDS = 4;
 const MAX_TOOL_CALLS = 8;
 
+const TASK_STATUS_LABELS: Record<string, string> = {
+  published: "待承接",
+  assigned: "已分派",
+  claimed: "已承接",
+  in_progress: "进行中",
+  blocked: "阻塞",
+  in_review: "待验收",
+  completed: "已完成",
+  cancelled: "已取消",
+};
+
+function formatExecutedSummary(results: Array<{ toolId: string; result: unknown }>, usedTools: string[]): string {
+  const tasks: Array<{ title: string; id: string; status: string; category?: string[]; isTemplate?: boolean }> = [];
+  const seen = new Set<string>();
+  const pushTask = (item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return;
+    const record = item as Record<string, unknown>;
+    const title = typeof record.title === "string" ? record.title : "";
+    const status = typeof record.status === "string" ? record.status : "";
+    const id = typeof record.id === "string" ? record.id : title;
+    if (!title || !status || seen.has(id)) return;
+    seen.add(id);
+    tasks.push({
+      title,
+      id,
+      status,
+      isTemplate: record.isTemplate === true,
+      category: Array.isArray(record.category) ? record.category.filter((value): value is string => typeof value === "string") : undefined,
+    });
+  };
+  for (const entry of results) {
+    if (!entry.result || typeof entry.result !== "object") continue;
+    const record = entry.result as Record<string, unknown>;
+    if (Array.isArray(record.tasks)) for (const task of record.tasks) pushTask(task);
+    if (record.task) pushTask(record.task);
+  }
+  const active = tasks.filter((task) => task.status !== "completed" && task.status !== "cancelled" && !task.isTemplate);
+  if (!active.length) {
+    if (usedTools.includes("work.find_task")) return "已调用任务查询工具核验，当前没有找到符合条件的未完成任务。";
+    return `已执行：${usedTools.join("、")}。如需具体对象的进度摘要，请继续追问。`;
+  }
+  const lines = active.map((task) => {
+    const label = TASK_STATUS_LABELS[task.status] ?? task.status;
+    const place = task.category?.length ? `［${task.category.join("/")}］` : "";
+    return `- ${task.title}（${label}${place}）`;
+  });
+  return `已通过任务查询核验，以下为未完成任务清单（共 ${active.length} 项）：\n${lines.join("\n")}\n如需某项的详情、时间线或交接链，可继续提问。`;
+}
+
 function detectsPromptInjection(message: string): boolean {
   return [
     /ignore\s+(all\s+)?(previous|prior).*instructions?/i,
@@ -147,6 +196,7 @@ export class AgentOrchestrator {
       ];
       const usedTools: string[] = [];
       const usedSkills = new Set<string>();
+      const executedResults: Array<{ toolId: string; result: unknown }> = [];
       const usage = { inputTokens: 0, outputTokens: 0, latencyMs: 0, provider: "", model: "" };
       let lastResponse: ModelResponse | null = null;
       let callCount = 0;
@@ -180,6 +230,7 @@ export class AgentOrchestrator {
               await this.finishRun(context, run);
               return run;
             }
+            executedResults.push({ toolId: outcome.tool.id, result: outcome.result });
             outboundClassification = mostRestrictiveClassification([outboundClassification, classifyUntrustedValue(outcome.result)]);
             if (outboundClassification === "restricted") throw new Error("MODEL_POLICY_DENIED");
             messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: JSON.stringify(outcome.result) });
@@ -192,7 +243,7 @@ export class AgentOrchestrator {
           modelPolicyDenied = true;
           lastResponse = { content: JSON.stringify({ answer: "当前读取结果包含受限信息，系统未将其继续发送给模型。请使用企业受控的敏感数据流程处理。" }), provider: usage.provider || "policy", model: usage.model || "policy-denied", inputTokens: 0, outputTokens: 0, latencyMs: 0 };
         } else if (usedTools.length) {
-          lastResponse = { content: JSON.stringify({ answer: `工具已执行：${usedTools.join("、")}。业务结果已经写入并可在任务栏核验。` }), provider: usage.provider || "unavailable", model: usage.model || "unavailable", inputTokens: 0, outputTokens: 0, latencyMs: 0 };
+          lastResponse = { content: JSON.stringify({ answer: formatExecutedSummary(executedResults, usedTools) }), provider: usage.provider || "unavailable", model: usage.model || "unavailable", inputTokens: 0, outputTokens: 0, latencyMs: 0 };
         } else {
           lastResponse = { content: JSON.stringify({ answer: "模型暂时不可用。当前没有执行任何业务工具；请稍后重试，或在任务栏使用明确的人工操作。" }), provider: "unavailable", model: "unavailable", inputTokens: 0, outputTokens: 0, latencyMs: 0 };
         }
