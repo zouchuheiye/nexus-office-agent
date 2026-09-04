@@ -117,6 +117,40 @@ export class TaskCommandService {
     };
   }
 
+  async findTask(context: RequestContext, input: { keyword: string; projectId?: string }) {
+    requirePermission(context, "work_task:read");
+    const data = await this.workspace(context);
+    const keyword = input.keyword.trim().toLocaleLowerCase("zh-CN");
+    const contains = (value?: string) => typeof value === "string" && value.toLocaleLowerCase("zh-CN").includes(keyword);
+    const missionById = new Map(data.missions.map((mission) => [mission.id, mission]));
+    const tasks = new Map<string, {
+      id: string; title: string; description: string; status: string; category: string[]; missionTitle?: string;
+      isTemplate: boolean; missingFields: string[]; assigneeId?: string; publishedBy: string; dueAt: string; version: number;
+    }>();
+    const push = (task: { id: string; missionId: string; title: string; description: string; status: string; isTemplate: boolean; missingFields: string[]; assigneeId?: string; publishedBy: string; dueAt: string; version: number }, category: string) => {
+      const mission = missionById.get(task.missionId);
+      if (input.projectId && mission?.projectId !== input.projectId) return;
+      if (!contains(task.title) && !contains(task.description) && !(mission && contains(mission.title))) return;
+      const existing = tasks.get(task.id);
+      if (existing) {
+        if (!existing.category.includes(category)) existing.category.push(category);
+        return;
+      }
+      tasks.set(task.id, {
+        id: task.id, title: task.title, description: task.description, status: task.status, category: [category],
+        missionTitle: mission?.title, isTemplate: task.isTemplate, missingFields: task.missingFields,
+        assigneeId: task.assigneeId, publishedBy: task.publishedBy, dueAt: task.dueAt, version: task.version,
+      });
+    };
+    for (const task of data.myTasks) push(task, "我的");
+    for (const task of data.availableTasks) push(task, "可承接");
+    for (const task of data.publishedByMe) push(task, "已发布");
+    for (const task of data.templates) push(task, "模板");
+    for (const task of data.handoffTasks) push(task, "交接参与");
+    for (const entry of data.pendingHandoffs) push(entry.task, "待签收");
+    return { tasks: [...tasks.values()], generatedAt: data.generatedAt };
+  }
+
   async appendMessage(context: RequestContext, input: Omit<WorkConversationMessage, "id" | "tenantId" | "createdAt">) {
     if (input.role === "user" && input.conversationId !== (await this.repository.getOrCreatePrimaryConversation(context.tenantId, context.actorId)).id) {
       throw new Error("WORK_CONVERSATION_NOT_FOUND");

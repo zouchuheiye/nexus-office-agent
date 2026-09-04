@@ -148,6 +148,16 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
     execute(context) { return service.memberWorkload(context); },
   });
   registry.register({
+    id: "work.find_task", skillId: "work-orchestration", version: 1,
+    description: "按标题/描述/所属使命名称搜索当前用户可见的任务。当用户询问某个任务是否存在、在哪里查看、按名称找任务时，必须先调用本工具核验；只有本工具返回空任务列表时才可以回答“未找到”，不得仅凭记忆或知识库检索下结论。",
+    requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { keyword: { type: "string", minLength: 1, maxLength: 160 }, projectId: { type: "string", format: "uuid" } }, required: ["keyword"] },
+    inputSchema: z.object({ keyword: z.string().trim().min(1).max(160), projectId: z.uuid().optional() }).strict(),
+    preview(input) { const value = z.object({ keyword: z.string() }).parse(input); return `按“${value.keyword}”搜索当前可见任务。`; },
+    execute(context, input) { return service.findTask(context, z.object({ keyword: z.string().trim().min(1).max(160), projectId: z.uuid().optional() }).strict().parse(input)); },
+  });
+  registry.register({
     id: "communication.publish_message", skillId: "company-communication", version: 1,
     description: "将沟通、同步、征询或反馈整理后放入当前用户可见的公司或部门消息池。它不是任务：不产生负责人、截止时间、验收、任务状态或确认门禁。kind=announcement 用于公告/置顶，kind=notice 用于普通通知或提醒。",
     requiredPermissions: ["message_pool:publish"], riskLevel: 1, confirmationPolicy: "never", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 2,
