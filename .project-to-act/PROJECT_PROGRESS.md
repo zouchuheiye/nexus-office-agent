@@ -291,3 +291,5 @@
 - 2026-09-04：移除输入框上方可见小字"说说你要处理什么"（E-125）：删除 `<label>` 可见文本，改以 textarea `aria-label` 保留无障碍名称，placeholder 维持"输入一件要处理的事…"。验证：typecheck 0。
 
 - 2026-09-04：输入提示文案由"Ctrl / ⌘ + Enter 发送"改为"Ctrl + Enter 发送"（E-126）。验证：typecheck 0。
+
+- 2026-09-04：发送键位改为 Enter 发送 / Shift + Enter 换行（E-127）：`handleComposerKeyDown` 在非组合输入（isComposing）且非 Shift 时回车即 `requestSubmit`，Shift+Enter 保留默认换行；提示文案同步为"Enter 发送 · Shift + Enter 换行"。验证：typecheck 0。
