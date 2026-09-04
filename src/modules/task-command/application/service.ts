@@ -132,7 +132,40 @@ export class TaskCommandService {
     if (conversation.id !== input.conversationId) throw new Error("WORK_CONVERSATION_NOT_FOUND");
     const people = await this.repository.listPeople(context.tenantId);
     const activeIds = new Set(people.map(({ id }) => id));
-    for (const item of input.packages) {
+    const now = new Date();
+    const missionMissing = new Set<WorkTemplateField>();
+    if (!input.objective?.trim()) missionMissing.add("工作目标");
+    if (!input.priority) missionMissing.add("优先级");
+    if (!input.dueAt) missionMissing.add("截止时间");
+    const missionDueAt = input.dueAt ?? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const normalizedPackages = input.packages.map((item) => {
+      const missing = new Set<WorkTemplateField>();
+      if (!item.description?.trim()) missing.add("任务说明");
+      if (!item.acceptanceCriteria?.trim()) missing.add("验收标准");
+      if (!item.requiredSkills.length) missing.add("所需技能");
+      if (!item.priority) missing.add("优先级");
+      if (!item.dueAt) missing.add("截止时间");
+      if (!item.startedAt) missing.add("任务开始时间");
+      if (!item.estimatedDays) missing.add("工期");
+      if (!item.capacityPoints) missing.add("容量点");
+      const assignmentMode: "direct" | "open_claim" = item.assignmentMode ?? (item.assigneeId ? "direct" : "open_claim");
+      if (assignmentMode === "direct" && !item.assigneeId) missing.add("负责人或承接范围");
+      return {
+        ...item,
+        description: item.description?.trim() || "待补充任务说明",
+        acceptanceCriteria: item.acceptanceCriteria?.trim() || "待补充验收标准",
+        requiredSkills: [...new Set(item.requiredSkills)],
+        assignmentMode,
+        priority: item.priority ?? "medium",
+        dueAt: item.dueAt ?? missionDueAt,
+        startedAt: item.startedAt ?? now.toISOString(),
+        estimatedDays: item.estimatedDays ?? 7,
+        capacityPoints: item.capacityPoints ?? 1,
+        missingFields: [...missing],
+      };
+    });
+    const missingFields = [...new Set<WorkTemplateField>([...missionMissing, ...normalizedPackages.flatMap((item) => item.missingFields)])];
+    for (const item of normalizedPackages) {
       if (item.assignmentMode === "direct") {
         requirePermission(context, "work_task:assign");
         if (!item.assigneeId || !activeIds.has(item.assigneeId)) throw new Error("WORK_ASSIGNEE_NOT_FOUND");
@@ -145,18 +178,26 @@ export class TaskCommandService {
       }
     }
     const bundle = createMissionBundle({
-      ...input,
       tenantId: context.tenantId,
+      conversationId: input.conversationId,
+      projectId: input.projectId,
+      title: input.title,
+      objective: input.objective?.trim() || `待补充：${input.title} 的工作目标`,
+      priority: input.priority ?? "medium",
+      dueAt: missionDueAt,
       publishedBy: context.actorId,
       source: execution?.source ?? "human",
       sourceRunId: execution?.sourceRunId,
+      isTemplate: false,
+      missingFields,
+      packages: normalizedPackages,
     });
     const events: Omit<WorkTaskEvent, "sequence">[] = [
       event({ tenantId: context.tenantId, missionId: bundle.mission.id, eventType: "mission_published", actorId: context.actorId, audience: "tenant", payload: { title: bundle.mission.title, packageCount: bundle.packages.length } }),
       ...bundle.packages.map((item) => event({ tenantId: context.tenantId, missionId: item.missionId, packageId: item.id, eventType: "package_published", actorId: context.actorId, audience: item.assignmentMode === "open_claim" ? "tenant" : "participants", payload: { title: item.title, assigneeId: item.assigneeId, assignmentMode: item.assignmentMode, version: item.version } })),
     ];
     const warnings: string[] = [];
-    for (const item of input.packages) {
+    for (const item of normalizedPackages) {
       if (item.assignmentMode === "direct" && item.assigneeId) {
         const person = people.find((entry) => entry.id === item.assigneeId);
         if (person && (person.inProgressTaskCount >= 5 || person.capacityPoints >= 20)) {
@@ -164,6 +205,7 @@ export class TaskCommandService {
         }
       }
     }
+    if (missingFields.length) warnings.push(`任务已按当前信息发布，待补充：${missingFields.join("、")}。`);
     const result = await this.repository.publishMission(bundle.mission, bundle.packages, events);
     return { ...result, warnings };
   }

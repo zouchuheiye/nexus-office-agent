@@ -9,24 +9,24 @@ export const publishMissionSchema = z.object({
   conversationId: z.uuid(),
   projectId: z.uuid().optional(),
   title: z.string().trim().min(2).max(160),
-  objective: z.string().trim().min(4).max(1200),
-  priority,
-  dueAt: isoDateTime,
+  objective: z.string().trim().min(2).max(1200).optional(),
+  priority: priority.optional(),
+  dueAt: isoDateTime.optional(),
   packages: z.array(z.object({
     title: z.string().trim().min(2).max(160),
-    description: z.string().trim().min(2).max(1200),
-    acceptanceCriteria: z.string().trim().min(2).max(800),
+    description: z.string().trim().min(2).max(1200).optional(),
+    acceptanceCriteria: z.string().trim().min(2).max(800).optional(),
     requiredSkills: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
-    assignmentMode: z.enum(["direct", "open_claim"]),
+    assignmentMode: z.enum(["direct", "open_claim"]).optional(),
     assigneeId: z.uuid().optional(),
     targetOrgUnitId: z.uuid().optional(),
-    priority,
-    dueAt: isoDateTime,
-    startedAt: isoDateTime,
-    estimatedDays: z.number().int().min(1).max(365),
-    capacityPoints: z.number().int().min(1).max(40).default(1),
+    priority: priority.optional(),
+    dueAt: isoDateTime.optional(),
+    startedAt: isoDateTime.optional(),
+    estimatedDays: z.number().int().min(1).max(365).optional(),
+    capacityPoints: z.number().int().min(1).max(40).optional(),
   }).strict().superRefine((value, context) => {
-    if (new Date(value.startedAt).getTime() >= new Date(value.dueAt).getTime()) context.addIssue({ code: "custom", path: ["startedAt"], message: "开始时间必须早于截止时间。" });
+    if (value.startedAt && value.dueAt && new Date(value.startedAt).getTime() >= new Date(value.dueAt).getTime()) context.addIssue({ code: "custom", path: ["startedAt"], message: "开始时间必须早于截止时间。" });
     if (value.assignmentMode === "direct" && !value.assigneeId) context.addIssue({ code: "custom", path: ["assigneeId"], message: "定向分派必须指定负责人。" });
     if (value.assignmentMode === "direct" && value.targetOrgUnitId) context.addIssue({ code: "custom", path: ["targetOrgUnitId"], message: "定向个人任务不能同时指定部门。" });
     if (value.assignmentMode === "open_claim" && value.assigneeId) context.addIssue({ code: "custom", path: ["assigneeId"], message: "公开承接任务不能预设负责人。" });

@@ -38,14 +38,14 @@ const publishJsonSchema = {
       assignmentMode: { type: "string", enum: ["direct", "open_claim"] }, assigneeId: { type: "string", format: "uuid" }, targetOrgUnitId: { type: "string", format: "uuid" }, priority: { type: "string", enum: ["critical", "high", "medium", "low"] },
       dueAt: { type: "string", format: "date-time" }, startedAt: { type: "string", format: "date-time" }, estimatedDays: { type: "integer", minimum: 1, maximum: 365 },
       capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
-    }, required: ["title", "description", "acceptanceCriteria", "requiredSkills", "assignmentMode", "priority", "dueAt", "startedAt", "estimatedDays", "capacityPoints"] } },
-  }, required: ["conversationId", "title", "objective", "priority", "dueAt", "packages"],
+    }, required: ["title"] } },
+  }, required: ["conversationId", "title", "packages"],
 } as const;
 
 export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCommandService) {
   registry.register({
     id: "work.create_task_template", skillId: "work-orchestration", version: 1,
-    description: "根据用户已经提供的最少信息创建一个局部任务模板；未提供的目标、说明、负责人或承接范围、截止时间、验收标准、优先级、容量点和技能会标记为待补充，不会分派给个人或部门，也不会进入可承接任务池。该 Tool 不替代正式发布门禁。",
+    description: "仅在用户明确要求“先建草稿/模板”时使用：创建当前用户可见的任务模板，缺失字段标记为待补充，不进入可承接任务池、不对外分派。用户要求直接发布/下发/等待承接时不要使用本工具，改用 work.publish_task_bundle。",
     requiredPermissions: ["work_task:create"], riskLevel: 1, confirmationPolicy: "never", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 2,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"], inputJsonSchema: createTemplateJsonSchema, inputSchema: createTaskTemplateSchema,
     preview(input) { const value = createTaskTemplateSchema.parse(input); return `将创建任务模板“${value.title}”，缺失字段会在模板中标记，暂不对外分派。`; },
@@ -61,7 +61,7 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
   });
   registry.register({
     id: "work.publish_task_bundle", skillId: "work-orchestration", version: 1,
-    description: "正式发布一个工作使命并一次性创建多个可验收任务包；每包必须定向至已知成员，或定向至一个部门供该部门成员承接，二者不可同时填写：direct 只填 assigneeId，open_claim 只填 targetOrgUnitId。调用本 Tool 只生成待人工确认的提案，不会直接创建任务；用户明确要求正式发布且参数齐全时必须调用，不要改为纯文字预览。",
+    description: "发布一个工作使命并创建任务包：用户怎么写就怎么发，把用户已说明的内容按原样发布，验收标准、截止时间、优先级、容量点、负责人等缺失字段由系统标记为“待补充”，不要要求用户先补全，也不要代为编造。用户说“发布/发下去/挂到任务栏/等待有人承接”时即调用本工具（生成待人工确认的提案）；只有用户明确要求“先建草稿/模板”时才改用 work.create_task_template。",
     requiredPermissions: ["work_task:create"], riskLevel: 2, confirmationPolicy: "always", sideEffect: "internal_idempotent", timeoutMs: 15_000, maxAttempts: 3,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"], inputJsonSchema: publishJsonSchema, inputSchema: publishMissionSchema,
     preview(input) { const value = publishMissionSchema.parse(input); return `将发布使命“${value.title}”，包含 ${value.packages.length} 个任务包。`; },

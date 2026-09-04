@@ -386,7 +386,7 @@ export function collectTaskReminderCandidates(packages: WorkPackage[], options: 
   const now = options.now ?? new Date();
   const dueSoonHours = options.dueSoonHours ?? 72;
   const blockedEscalationHours = options.blockedEscalationHours ?? 24;
-  const active = packages.filter((item) => !item.isTemplate && !["completed", "cancelled"].includes(item.status));
+  const active = packages.filter((item) => !item.isTemplate && !item.missingFields.length && !["completed", "cancelled"].includes(item.status));
   const candidates: TaskReminderCandidate[] = [];
   for (const item of active) {
     if (item.status === "blocked") continue; // 阻塞任务走升级通道，避免重复提醒
