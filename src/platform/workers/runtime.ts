@@ -66,7 +66,7 @@ export function createDurableWorkerRuntime() {
   const maxTenantConcurrency = positiveInteger(process.env.WORKER_MAX_CONCURRENT_PER_TENANT, 2);
   const workers = new Map<WorkerRole, TenantWorker>([
     ["inbox", new InboxWorker(new PostgresInboxWorkRepository(database), new DurableInboundEventHandler(channelActions, events, managementChannelActions), leaseMs, maxTenantConcurrency)],
-    ["agent", new AgentJobWorker(new PostgresAgentJobRepository(database), authorization, new ManagementContextProvider(getManagementLoopService()), getAgentToolRegistry(), leaseMs, maxTenantConcurrency)],
+    ["agent", new AgentJobWorker(new PostgresAgentJobRepository(database), authorization, new ManagementContextProvider(getManagementLoopService(), getTaskCommandService()), getAgentToolRegistry(), leaseMs, maxTenantConcurrency)],
     ["outbox", new OutboxDispatcher(new PostgresOutboxWorkRepository(database), leaseMs, maxTenantConcurrency)],
   ]);
   if (roles.includes("pi-change-delivery")) {

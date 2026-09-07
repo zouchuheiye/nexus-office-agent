@@ -4,21 +4,16 @@ import { PostgresEnterpriseIntelligenceRepository } from "@/src/modules/enterpri
 import { InMemoryEventStore } from "@/src/modules/events/application/event-store";
 import { PostgresEventStore } from "@/src/modules/events/infrastructure/postgres-event-store";
 import { createPostgresDatabase } from "@/src/platform/database/postgres";
+import { moduleRuntime } from "@/src/platform/runtime/module-runtime";
 
-const runtime = globalThis as typeof globalThis & { __nexusEnterpriseService?: EnterpriseIntelligenceService; __nexusEnterpriseServiceVersion?: number };
+const runtimeGeneration = Symbol("enterprise-intelligence");
 
 export function getEnterpriseIntelligenceService() {
-  if (runtime.__nexusEnterpriseServiceVersion !== 1) {
-    runtime.__nexusEnterpriseService = undefined;
-    runtime.__nexusEnterpriseServiceVersion = 1;
-  }
-  if (!runtime.__nexusEnterpriseService) {
+  return moduleRuntime("enterprise-intelligence", runtimeGeneration, () => {
     if (process.env.DATABASE_URL) {
       const database = createPostgresDatabase(process.env.DATABASE_URL);
-      runtime.__nexusEnterpriseService = new EnterpriseIntelligenceService(new PostgresEnterpriseIntelligenceRepository(database), new PostgresEventStore(database));
-    } else {
-      runtime.__nexusEnterpriseService = new EnterpriseIntelligenceService(getDevelopmentEnterpriseRepository(), new InMemoryEventStore());
+      return new EnterpriseIntelligenceService(new PostgresEnterpriseIntelligenceRepository(database), new PostgresEventStore(database));
     }
-  }
-  return runtime.__nexusEnterpriseService;
+    return new EnterpriseIntelligenceService(getDevelopmentEnterpriseRepository(), new InMemoryEventStore());
+  });
 }

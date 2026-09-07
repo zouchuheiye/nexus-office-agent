@@ -9,90 +9,61 @@ import { getDevelopmentTestNotificationProposalRepository, PostgresTestNotificat
 import { RuntimeWecomAppControlGateway } from "@/src/modules/integration/infrastructure/wecom-app-control-gateway";
 import { RuntimeWecomApplicationMessageGateway } from "@/src/modules/integration/infrastructure/wecom-application-message-gateway";
 import { createPostgresDatabase } from "@/src/platform/database/postgres";
+import { moduleRuntime } from "@/src/platform/runtime/module-runtime";
 
-const runtime = globalThis as typeof globalThis & {
-  __nexusIntegrationAcceptanceService?: IntegrationAcceptanceService;
-  __nexusIntegrationAcceptanceServiceVersion?: number;
-  __nexusTestNotificationService?: TestNotificationService;
-  __nexusTestNotificationServiceVersion?: number;
-  __nexusWecomAccessControlService?: WecomAccessControlService;
-  __nexusWecomAccessControlServiceVersion?: number;
-  __nexusWecomApplicationMessageService?: WecomApplicationMessageService;
-  __nexusWecomApplicationMessageServiceVersion?: number;
-};
+const runtimeGeneration = Symbol("integration");
 
 export function getIntegrationAcceptanceService(): IntegrationAcceptanceService {
-  if (runtime.__nexusIntegrationAcceptanceServiceVersion !== 2) {
-    runtime.__nexusIntegrationAcceptanceService = undefined;
-    runtime.__nexusIntegrationAcceptanceServiceVersion = 2;
-  }
-  if (!runtime.__nexusIntegrationAcceptanceService) {
+  return moduleRuntime("integration.acceptance", runtimeGeneration, () => {
     const repository = process.env.DATABASE_URL
       ? new PostgresAcceptanceRepository(createPostgresDatabase(process.env.DATABASE_URL))
       : getDevelopmentAcceptanceRepository();
-    runtime.__nexusIntegrationAcceptanceService = new IntegrationAcceptanceService(
+    return new IntegrationAcceptanceService(
       repository,
       createRuntimeIdentityAcceptanceProbe(),
       createRuntimeConnectorAcceptanceProbe(),
     );
-  }
-  return runtime.__nexusIntegrationAcceptanceService;
+  });
 }
 
 export function getWecomApplicationMessageService(): WecomApplicationMessageService {
-  if (runtime.__nexusWecomApplicationMessageServiceVersion !== 1) {
-    runtime.__nexusWecomApplicationMessageService = undefined;
-    runtime.__nexusWecomApplicationMessageServiceVersion = 1;
-  }
-  if (!runtime.__nexusWecomApplicationMessageService) {
+  return moduleRuntime("integration.wecom-message", runtimeGeneration, () => {
     const repository = process.env.DATABASE_URL
       ? new PostgresAcceptanceRepository(createPostgresDatabase(process.env.DATABASE_URL))
       : getDevelopmentAcceptanceRepository();
-    runtime.__nexusWecomApplicationMessageService = new WecomApplicationMessageService(
+    return new WecomApplicationMessageService(
       repository,
       new RuntimeWecomApplicationMessageGateway(),
     );
-  }
-  return runtime.__nexusWecomApplicationMessageService;
+  });
 }
 
 export function getTestNotificationService(): TestNotificationService {
-  if (runtime.__nexusTestNotificationServiceVersion !== 1) {
-    runtime.__nexusTestNotificationService = undefined;
-    runtime.__nexusTestNotificationServiceVersion = 1;
-  }
-  if (!runtime.__nexusTestNotificationService) {
+  return moduleRuntime("integration.test-notification", runtimeGeneration, () => {
     if (process.env.DATABASE_URL) {
       const database = createPostgresDatabase(process.env.DATABASE_URL);
-      runtime.__nexusTestNotificationService = new TestNotificationService(
+      return new TestNotificationService(
         new PostgresAcceptanceRepository(database),
         new PostgresTestNotificationProposalRepository(database),
         createRuntimeTestNotificationGateway(database),
       );
-    } else {
-      runtime.__nexusTestNotificationService = new TestNotificationService(
-        getDevelopmentAcceptanceRepository(),
-        getDevelopmentTestNotificationProposalRepository(),
-        createRuntimeTestNotificationGateway(),
-      );
     }
-  }
-  return runtime.__nexusTestNotificationService;
+    return new TestNotificationService(
+      getDevelopmentAcceptanceRepository(),
+      getDevelopmentTestNotificationProposalRepository(),
+      createRuntimeTestNotificationGateway(),
+    );
+  });
 }
 
 export function getWecomAccessControlService(): WecomAccessControlService {
-  if (runtime.__nexusWecomAccessControlServiceVersion !== 1) {
-    runtime.__nexusWecomAccessControlService = undefined;
-    runtime.__nexusWecomAccessControlServiceVersion = 1;
-  }
-  if (!runtime.__nexusWecomAccessControlService) {
+  return moduleRuntime("integration.wecom-access", runtimeGeneration, () => {
     const repository = process.env.DATABASE_URL
       ? new PostgresAcceptanceRepository(createPostgresDatabase(process.env.DATABASE_URL))
       : getDevelopmentAcceptanceRepository();
-    runtime.__nexusWecomAccessControlService = new WecomAccessControlService(
+    return new WecomAccessControlService(
       repository,
       new RuntimeWecomAppControlGateway(),
     );
-  }
-  return runtime.__nexusWecomAccessControlService;
+  });
 }

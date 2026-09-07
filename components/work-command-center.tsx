@@ -2,21 +2,16 @@
 
 import {
   ArrowRight,
-  BarChart3,
   Bot,
-  CalendarDays,
   Check,
   CircleAlert,
   CircleDashed,
   FileCheck2,
-  FolderKanban,
   ListTodo,
   LoaderCircle,
   MessageCircle,
-  Plus,
   Radio,
   RotateCcw,
-  Search,
   Send,
   ShieldCheck,
   Sparkles,
@@ -24,38 +19,15 @@ import {
   UsersRound,
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  api,
+  useWorkspace,
+  type TaskHandoff,
+  type TimelineEvent,
+  type WorkspaceTask as Task,
+} from "@/components/workspace-client";
 
 type Citation = { id: string; label: string; excerpt: string; objectType: string };
-type PersistedMessage = { id: string; role: "user" | "assistant" | "tool"; content: string; runId?: string; route: { skills: string[]; tools: string[] }; citations: Citation[]; createdAt: string };
-type Person = { id: string; displayName: string; orgName?: string; positionName?: string; activeTaskCount: number };
-type Task = {
-  id: string; missionId: string; title: string; description: string; acceptanceCriteria: string; requiredSkills: string[];
-  assignmentMode: "direct" | "open_claim"; assigneeId?: string; targetOrgUnitId?: string; publishedBy: string; priority: "critical" | "high" | "medium" | "low";
-  dueAt: string; capacityPoints: number; status: "published" | "assigned" | "claimed" | "in_progress" | "blocked" | "in_review" | "completed" | "cancelled";
-  evidenceRefs: string[]; blockedReason?: string; isTemplate: boolean; missingFields: string[]; version: number;
-};
-type PoolFeedback = { id: string; messageId: string; content: string; authorId: string; createdAt: string };
-type PoolMessage = { id: string; poolKey: string; subject: string; content: string; authorId: string; createdAt: string; feedback: PoolFeedback[] };
-type MessagePool = { key: string; name: string; scope: "company" | "department"; orgUnitId?: string; messages: PoolMessage[] };
-type TaskHandoff = {
-  id: string; packageId: string; fromAssigneeId: string; toAssigneeId: string; note: string; artifactRefs: string[]; status: "pending" | "accepted" | "rejected";
-  responseNote?: string; createdAt: string; respondedAt?: string;
-  snapshot: { packageVersion: number; title: string; description: string; acceptanceCriteria: string; evidenceRefs: string[]; dueAt: string };
-};
-type Workspace = {
-  conversation: { id: string; title: string };
-  messages: PersistedMessage[];
-  people: Person[];
-  orgUnits: Array<{ id: string; name: string }>;
-  myTasks: Task[];
-  availableTasks: Task[];
-  publishedByMe: Task[];
-  templates: Task[];
-  handoffs: TaskHandoff[];
-  pendingHandoffs: Array<{ handoff: TaskHandoff; task: Task }>;
-  messagePools: MessagePool[];
-  generatedAt: string;
-};
 type DisplayMessage = {
   role: "assistant" | "user";
   content: string;
@@ -70,23 +42,13 @@ const statusCopy: Record<Task["status"], string> = {
   published: "待承接", assigned: "已分派", claimed: "已承接", in_progress: "进行中", blocked: "阻塞", in_review: "待验收", completed: "已完成", cancelled: "已取消",
 };
 const priorityCopy = { critical: "紧急", high: "高", medium: "中", low: "低" } as const;
-const officeShortcuts = [
-  { label: "任务", icon: ListTodo, prompt: "帮我处理一项任务。先理解目标、时限、相关人员和已有交接链，再决定是直接回答、拆分、分派、承接还是正式交接。" },
-  { label: "消息", icon: MessageCircle, prompt: "我需要发一条沟通消息。请先判断它是否只是同步、征询或反馈；若不产生责任人、截止时间和验收，请放入合适的公司或部门消息池。" },
-  { label: "审批", icon: FileCheck2, prompt: "我需要处理一项审批，请先询问必要信息，再根据当前权限和流程继续。" },
-  { label: "项目", icon: FolderKanban, prompt: "帮我查看或推进一个项目。请先确认项目和我想完成的事情。" },
-  { label: "会议", icon: CalendarDays, prompt: "帮我准备或跟进一场会议，请先确认会议主题、参与人和目标。" },
-  { label: "知识", icon: Search, prompt: "帮我从已授权的企业知识中查找信息，并给出可核验引用。" },
-  { label: "经营", icon: BarChart3, prompt: "帮我分析一个经营问题，严格区分事实、推断和建议。" },
-] as const;
-
-async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || "请求未完成");
-  return payload.data as T;
-}
-
+const dueCopy: Record<string, string> = { overdue: "已逾期", due_soon: "临期", normal: "进行中", done: "已完成" };
+const timelineEventCopy: Record<string, string> = {
+  mission_published: "使命发布", package_published: "任务发布", package_claimed: "已承接", package_status_changed: "状态变更",
+  package_handoff_initiated: "交接发起", package_handoff_accepted: "交接签收", package_handoff_rejected: "交接退回",
+};
+function dueLabel(task: Task): string { return dueCopy[task.dueState ?? "normal"]; }
+function dueRank(task: Task): number { return task.dueState === "overdue" ? 0 : task.dueState === "due_soon" ? 1 : task.dueState === "done" ? 3 : 2; }
 export function WorkCommandCenter({
   messages,
   query,
@@ -108,49 +70,100 @@ export function WorkCommandCenter({
   onHydrate: (conversationId: string, messages: DisplayMessage[]) => void;
   onNotice: (message: string) => void;
 }) {
-  const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const { workspace, loading, error, load: loadWorkspace } = useWorkspace();
   const [taskMode, setTaskMode] = useState<"mine" | "available" | "published" | "handoffs">("mine");
   const [railMode, setRailMode] = useState<"tasks" | "messages">("tasks");
   const [busyTask, setBusyTask] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const hydrated = useRef(false);
   const conversationEnd = useRef<HTMLDivElement>(null);
+  const didInitialJump = useRef(false);
+  const stickToBottomRef = useRef(true); // follow new content only while the user is near the bottom
+  const handledCountRef = useRef(0); // last message count we already positioned
 
-  const loadWorkspace = useCallback(async () => {
+  const [timelines, setTimelines] = useState<Record<string, TimelineEvent[]>>({});
+  const refreshWorkspace = useCallback(async () => {
+    setRefreshing(true);
     try {
-      const data = await api<Workspace>("/api/v1/task-command/workspace", { cache: "no-store" });
-      setWorkspace(data);
-      setError("");
-      if (!hydrated.current) {
-        hydrated.current = true;
-        onHydrate(data.conversation.id, data.messages.filter(({ role }) => role !== "tool").map((item) => ({
-          role: item.role as "assistant" | "user", content: item.content, runId: item.runId, citations: item.citations, routing: item.route,
-        })));
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "任务工作区加载失败");
-    } finally { setLoading(false); }
-  }, [onHydrate]);
+      await loadWorkspace();
+      onNotice(`已刷新 · ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date())}`);
+    } catch {
+      onNotice("刷新失败，请稍后重试");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadWorkspace, onNotice]);
+  const loadTimeline = useCallback(async (taskId: string) => {
+    if (timelines[taskId]) return;
+    try {
+      const data = await api<{ task: Task; timeline: TimelineEvent[] }>(`/api/v1/task-command/packages/${taskId}/timeline`, { cache: "no-store" });
+      setTimelines((current) => ({ ...current, [taskId]: data.timeline }));
+    } catch { /* timeline is best-effort */ }
+  }, [timelines]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadWorkspace(), 0);
-    return () => window.clearTimeout(timer);
-  }, [loadWorkspace]);
+    if (!workspace || hydrated.current) return;
+    hydrated.current = true;
+    onHydrate(workspace.conversation.id, workspace.messages.filter(({ role }) => role !== "tool").map((item) => ({
+      role: item.role as "assistant" | "user", content: item.content, runId: item.runId, citations: item.citations, routing: item.route,
+    })));
+  }, [workspace, onHydrate]);
   useEffect(() => {
     const stream = new EventSource("/api/v1/task-command/message-events");
-    const refresh = () => void loadWorkspace();
+    const refresh = () => void loadWorkspace().catch(() => undefined);
     stream.addEventListener("message-change", refresh);
     return () => stream.close();
   }, [loadWorkspace]);
   useEffect(() => {
     const stream = new EventSource("/api/v1/task-command/events");
-    const refresh = () => void loadWorkspace();
+    const refresh = () => void loadWorkspace().catch(() => undefined);
     stream.addEventListener("task-change", refresh);
     window.addEventListener("nexus:task-command-changed", refresh);
     return () => { stream.close(); window.removeEventListener("nexus:task-command-changed", refresh); };
   }, [loadWorkspace]);
-  useEffect(() => { conversationEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [messages, isThinking]);
+  useEffect(() => {
+    // On returning to the conversation, jump straight to the latest message (no animation).
+    if (!didInitialJump.current) {
+      if (!messages.length || !workspace) return; // wait for the real workspace hydration
+      didInitialJump.current = true;
+      stickToBottomRef.current = true;
+      handledCountRef.current = messages.length;
+      const frame = window.requestAnimationFrame(() => {
+        const container = conversationEnd.current?.parentElement as HTMLElement | null;
+        if (container) container.scrollTop = container.scrollHeight;
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+    // Skip re-renders that carry the same messages (e.g. re-hydration) so we never move the view.
+    const hasNewContent = messages.length > handledCountRef.current || isThinking;
+    if (!hasNewContent || !stickToBottomRef.current) return;
+    // Follow only while the user is near the bottom; land on the START of a long new answer
+    // so long replies are read from the beginning instead of jumping to their end.
+    const frame = window.requestAnimationFrame(() => {
+      const container = conversationEnd.current?.parentElement as HTMLElement | null;
+      if (!container) return;
+      const messagesList = Array.from(container.querySelectorAll<HTMLElement>(".command-message"));
+      const last = messagesList[messagesList.length - 1];
+      if (last && last.offsetHeight >= container.clientHeight - 8) {
+        last.scrollIntoView({ block: "start" });
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
+    });
+    handledCountRef.current = messages.length;
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, isThinking, workspace]);
+
+  // Remember whether the user is reading near the bottom, so auto-follow never yanks them away from history.
+  useEffect(() => {
+    const container = conversationEnd.current?.parentElement as HTMLElement | null;
+    if (!container) return;
+    const onScroll = () => {
+      stickToBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight <= 96;
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, []);
 
   const tasks = taskMode === "mine" ? workspace?.myTasks ?? [] : taskMode === "available" ? workspace?.availableTasks ?? [] : taskMode === "published" ? workspace?.publishedByMe ?? [] : workspace?.pendingHandoffs.map(({ task }) => task) ?? [];
   const peopleById = useMemo(() => new Map(workspace?.people.map((person) => [person.id, person]) ?? []), [workspace]);
@@ -160,8 +173,12 @@ export function WorkCommandCenter({
     for (const handoff of workspace?.handoffs ?? []) values.set(handoff.packageId, [...(values.get(handoff.packageId) ?? []), handoff]);
     return values;
   }, [workspace]);
-  const pendingHandoffsByTask = useMemo(() => new Map(workspace?.pendingHandoffs.map(({ task, handoff }) => [task.id, handoff]) ?? []), [workspace]);
+  const pendingHandoffsByTask = useMemo(() => new Map(workspace?.pendingHandoffs.filter((entry) => entry.direction === "incoming").map(({ task, handoff }) => [task.id, handoff]) ?? []), [workspace]);
+  const outgoingHandoffsByTask = useMemo(() => new Map((workspace?.pendingHandoffs.filter((entry) => entry.direction === "outgoing") ?? []).map((entry) => [entry.task.id, entry.handoff])), [workspace]);
   const messageCount = useMemo(() => workspace?.messagePools.reduce((total, pool) => total + pool.messages.length, 0) ?? 0, [workspace]);
+  const cancellableStatuses = new Set<Task["status"]>(["published", "assigned", "claimed", "in_progress", "blocked", "in_review"]);
+  const hasPendingHandoff = (taskId: string) => (handoffsByPackage.get(taskId) ?? []).some((handoff) => handoff.status === "pending");
+  const canCancelTask = (task: Task) => !task.isTemplate && cancellableStatuses.has(task.status) && (taskMode === "published" || taskMode === "mine") && !hasPendingHandoff(task.id);
 
   async function claim(task: Task) {
     setBusyTask(task.id);
@@ -184,8 +201,49 @@ export function WorkCommandCenter({
     finally { setBusyTask(""); }
   }
 
+  async function cancelTask(task: Task) {
+    if (!window.confirm(`确认取消任务「${task.title}」？取消后保留审计记录，任务不可恢复。`)) return;
+    await transition(task, "cancelled");
+  }
+
+  async function revokeHandoff(handoff: TaskHandoff, version: number) {
+    if (!window.confirm("确认撤回这条交接？对方将不能再签收，任务继续留在你名下。")) return;
+    setBusyTask(handoff.packageId);
+    try {
+      await api(`/api/v1/task-command/handoffs/${handoff.id}/revoke`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: version }) });
+      onNotice("已撤回交接");
+      await loadWorkspace();
+    } catch (cause) { onNotice(cause instanceof Error ? cause.message : "撤回交接失败"); }
+    finally { setBusyTask(""); }
+  }
+
+  async function acceptHandoff(handoff: TaskHandoff, version: number) {
+    if (!window.confirm(`确认签收这条交接？签收后任务责任将切换到你的名下。`)) return;
+    setBusyTask(handoff.packageId);
+    try {
+      await api(`/api/v1/task-command/handoffs/${handoff.id}/response`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: version, decision: "accept" }) });
+      onNotice("已签收交接，任务已切换到你的名下");
+      await loadWorkspace();
+    } catch (cause) { onNotice(cause instanceof Error ? cause.message : "签收失败"); }
+    finally { setBusyTask(""); }
+  }
+
+  async function rejectHandoff(handoff: TaskHandoff, version: number) {
+    const reason = window.prompt("退回原因（至少 4 字）：");
+    if (reason === null) return;
+    if (!reason.trim() || reason.trim().length < 4) { onNotice("退回必须填写至少 4 字的理由"); return; }
+    setBusyTask(handoff.packageId);
+    try {
+      await api(`/api/v1/task-command/handoffs/${handoff.id}/response`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: version, decision: "reject", responseNote: reason.trim() }) });
+      onNotice("已退回交接");
+      await loadWorkspace();
+    } catch (cause) { onNotice(cause instanceof Error ? cause.message : "退回失败"); }
+    finally { setBusyTask(""); }
+  }
+
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    const composing = Boolean((event.nativeEvent as unknown as { isComposing?: boolean }).isComposing);
+    if (event.key === "Enter" && !event.shiftKey && !composing) {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
     }
@@ -196,7 +254,7 @@ export function WorkCommandCenter({
       <section className="primary-conversation-panel">
         <div className="conversation-toolbar">
           <div><span className="command-agent-mark"><Sparkles size={16} /></span><div><strong>枢纽 Agent</strong><small><i /> 企业办公入口</small></div></div>
-          <div className="conversation-guard"><span><ShieldCheck size={14} />权限已同步</span><button type="button" onClick={() => onQueryChange("我想处理一件新的办公事项，请先询问必要信息。") }><Plus size={14} />新事项</button></div>
+          <div className="conversation-guard"><span><ShieldCheck size={14} />权限已同步</span></div>
         </div>
 
         <div className="command-conversation" aria-live="polite">
@@ -216,16 +274,14 @@ export function WorkCommandCenter({
           <div ref={conversationEnd} />
         </div>
 
-        <div className="command-suggestions" aria-label="常用办公入口">{officeShortcuts.map(({ label, prompt, icon: Icon }) => <button type="button" key={label} onClick={() => onQueryChange(prompt)}><Icon size={15} />{label}</button>)}</div>
         <form className="primary-composer" onSubmit={onSubmit}>
-          <label htmlFor="primary-work-command">说说你要处理什么</label>
-          <textarea id="primary-work-command" value={query} onChange={(event) => onQueryChange(event.target.value)} onKeyDown={handleComposerKeyDown} rows={4} placeholder="输入一件要处理的事…" />
-          <footer><div><span><ShieldCheck size={13} />只使用当前账号有权访问的数据和能力</span><small>Ctrl / ⌘ + Enter 发送</small></div><button type="submit" aria-label="发送" disabled={!query.trim() || isThinking}>{isThinking ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}</button></footer>
+          <textarea id="primary-work-command" aria-label="说说你要处理什么" value={query} onChange={(event) => onQueryChange(event.target.value)} onKeyDown={handleComposerKeyDown} rows={6} placeholder="输入一件要处理的事…" />
+          <footer><div><small>Enter 发送 · Shift + Enter 换行</small></div><button type="submit" aria-label="发送" disabled={!query.trim() || isThinking}>{isThinking ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}</button></footer>
         </form>
       </section>
 
       <aside className="live-task-rail">
-        <header><div><h2>{railMode === "tasks" ? "任务" : "消息池"}</h2><p>{workspace ? `已同步 · ${formatTime(workspace.generatedAt)}` : "正在同步"}</p></div><div className="task-rail-actions"><button className="task-publish-action" type="button" onClick={() => onQueryChange(railMode === "tasks" ? "我需要正式发布一项任务，请先确认目标、接收对象（个人或部门）、截止时间、验收标准和分派方式。" : "我需要推送一条沟通消息。请理解内容后放入当前可见的合适消息池；这不是任务，不需要负责人、截止时间或验收。") }><Plus size={14} />{railMode === "tasks" ? "新建" : "推送"}</button><button type="button" onClick={() => void loadWorkspace()} aria-label="刷新工作区"><RotateCcw className={loading ? "spin" : ""} size={15} /></button></div></header>
+        <header><div><h2>{railMode === "tasks" ? "任务" : "消息池"}</h2><p>{workspace ? `已同步 · ${formatTime(workspace.generatedAt)}` : "正在同步"}</p></div><div className="task-rail-actions"><button type="button" onClick={() => void refreshWorkspace()} disabled={refreshing} aria-label="刷新工作区"><RotateCcw className={refreshing ? "spin" : ""} size={15} /></button></div></header>
         <div className="task-rail-tabs task-rail-mode-tabs" role="tablist" aria-label="工作上下文">
           <button type="button" role="tab" aria-selected={railMode === "tasks"} className={railMode === "tasks" ? "active" : ""} onClick={() => setRailMode("tasks")}><ListTodo size={14} />任务 <b>{(workspace?.myTasks.length ?? 0) + (workspace?.availableTasks.length ?? 0)}</b></button>
           <button type="button" role="tab" aria-selected={railMode === "messages"} className={railMode === "messages" ? "active" : ""} onClick={() => setRailMode("messages")}><MessageCircle size={14} />消息 <b>{messageCount}</b></button>
@@ -238,19 +294,22 @@ export function WorkCommandCenter({
             <button type="button" role="tab" aria-selected={taskMode === "handoffs"} className={taskMode === "handoffs" ? "active" : ""} onClick={() => setTaskMode("handoffs")}><FileCheck2 size={14} />待交接 <b>{workspace?.pendingHandoffs.length ?? 0}</b></button>
           </div>
           <div className="task-rail-list">
-          {loading && !workspace ? <TaskRailState icon={LoaderCircle} title="正在同步任务" detail="" spinning /> : error && !workspace ? <TaskRailState icon={CircleAlert} title="任务暂时不可用" detail={error} action={() => void loadWorkspace()} /> : !tasks.length ? <TaskRailState icon={CircleDashed} title={taskMode === "mine" ? "没有待处理任务" : taskMode === "available" ? "没有可承接任务" : taskMode === "handoffs" ? "没有待签收交接" : "还没有发布任务"} detail="" /> : tasks.map((task) => {
+          {loading && !workspace ? <TaskRailState icon={LoaderCircle} title="正在同步任务" detail="" spinning /> : error && !workspace ? <TaskRailState icon={CircleAlert} title="任务暂时不可用" detail={error} action={() => void loadWorkspace()} /> : !tasks.length ? <TaskRailState icon={CircleDashed} title={taskMode === "mine" ? "没有待处理任务" : taskMode === "available" ? "没有可承接任务" : taskMode === "handoffs" ? "没有待签收交接" : "还没有发布任务"} detail="" /> : (() => { const sortedTasks = [...tasks].sort((left, right) => dueRank(left) - dueRank(right)); return sortedTasks.map((task, index) => {
             const taskHandoffs = handoffsByPackage.get(task.id) ?? [];
             const pendingHandoff = pendingHandoffsByTask.get(task.id);
-            return <article className={`task-dispatch-card is-${task.status}${task.isTemplate ? " is-template" : ""}`} key={task.id}>
-            <div className="task-dispatch-top"><span className={`task-priority is-${task.priority}`}>{task.isTemplate ? "模板" : priorityCopy[task.priority]}</span><span className="task-state"><i />{task.isTemplate ? "待补充" : statusCopy[task.status]}</span></div>
+            const prevDue = index > 0 ? sortedTasks[index - 1].dueState ?? "normal" : null;
+            const showDueHeader = (taskMode === "mine" || taskMode === "published") && (task.dueState ?? "normal") !== prevDue;
+            return <div className="task-rail-group" key={task.id}>{showDueHeader ? <div className="task-due-group-label">{dueLabel(task)} · {sortedTasks.filter((item) => (item.dueState ?? "normal") === (task.dueState ?? "normal")).length}</div> : null}<article className={`task-dispatch-card is-${task.status}${task.isTemplate ? " is-template" : ""}`}>
+            <div className="task-dispatch-top"><span className={`task-priority is-${task.priority}`}>{task.isTemplate ? "模板" : priorityCopy[task.priority]}</span>{!task.isTemplate && task.dueState && ["overdue", "due_soon"].includes(task.dueState) ? <span className={`task-due is-${task.dueState}`}>{dueLabel(task)}</span> : null}<span className="task-state"><i />{task.isTemplate ? "待补充" : statusCopy[task.status]}</span>{outgoingHandoffsByTask.has(task.id) ? <span className="task-handoff-waiting">{taskMode === "handoffs" ? "等对方签收" : `正在交接中 · 等待${peopleById.get(outgoingHandoffsByTask.get(task.id)!.toAssigneeId)?.displayName ?? "对方"}确认`}</span> : null}{canCancelTask(task) ? <button className="task-cancel-action" type="button" disabled={busyTask === task.id} onClick={() => void cancelTask(task)}>{busyTask === task.id ? "取消中…" : "取消"}</button> : null}</div>
             <h3>{task.title}</h3><p>{task.description}</p>
-            <dl><div><dt>接收对象</dt><dd>{task.assigneeId ? peopleById.get(task.assigneeId)?.displayName ?? "已指派成员" : task.targetOrgUnitId ? `${orgUnitsById.get(task.targetOrgUnitId)?.name ?? "指定部门"}待承接` : "公司公开承接"}</dd></div><div><dt>截止</dt><dd>{formatDate(task.dueAt)}</dd></div></dl>
+            <dl><div><dt>接收对象</dt><dd>{task.assigneeId ? peopleById.get(task.assigneeId)?.displayName ?? "已指派成员" : task.targetOrgUnitId ? `${orgUnitsById.get(task.targetOrgUnitId)?.name ?? "指定部门"}待承接` : "公司公开承接"}</dd></div>{task.startedAt ? <div><dt>开始</dt><dd>{formatDate(task.startedAt)}</dd></div> : null}<div><dt>截止</dt><dd>{formatDate(task.dueAt)}{task.dueState === "overdue" ? " · 已逾期" : task.dueState === "due_soon" ? " · 临期" : ""}</dd></div>{task.estimatedDays ? <div><dt>工期</dt><dd>{task.estimatedDays} 天</dd></div> : null}</dl>
             <details className="task-acceptance"><summary>验收标准</summary><p>{task.acceptanceCriteria}</p></details>
-            {task.isTemplate && task.missingFields.length ? <div className="task-template-missing">待补充：{task.missingFields.join("、")}</div> : null}
-            {taskHandoffs.length ? <details className="task-handoff-trail"><summary>交接链 · {taskHandoffs.length} 棒{taskHandoffs.some(({ status }) => status === "pending") ? " · 待签收" : ""}</summary>{taskHandoffs.slice(-4).map((handoff) => <div className="task-handoff-line" key={handoff.id}><span>{peopleById.get(handoff.fromAssigneeId)?.displayName ?? "前负责人"}<ArrowRight size={11} />{peopleById.get(handoff.toAssigneeId)?.displayName ?? "接收人"}</span><small>{handoff.status === "pending" ? "待签收" : handoff.status === "accepted" ? "已签收" : "已退回"} · 文件/资料 {handoff.artifactRefs.length} · v{handoff.snapshot.packageVersion}</small><p>{handoff.note}</p>{handoff.responseNote ? <p className="task-handoff-response">{handoff.responseNote}</p> : null}</div>)}</details> : null}
-            {taskMode === "mine" && task.assigneeId && !taskHandoffs.some(({ status }) => status === "pending") && !["in_review", "completed", "cancelled"].includes(task.status) ? <button className="task-handoff-action" type="button" onClick={() => onQueryChange(`我需要正式交接任务“${task.title}”。请先通过 work.get_task_handoff_trail 核验现有交接链和文件/资料引用，再确认交给哪位当前可用成员、交接说明和文件/资料引用；确认后用 work.initiate_task_handoff 发起版本 ${task.version} 的交接。`)}>发起交接<ArrowRight size={13} /></button> : null}
-            <footer>{task.isTemplate && taskMode === "published" ? <button onClick={() => onQueryChange(`补充任务模板“${task.title}”，模板 ID 为 ${task.id}，当前版本为 ${task.version}。请先询问我想补充哪些字段，再使用 work.update_task_template 更新；不要正式分派。`)}>补充模板<ArrowRight size={13} /></button> : taskMode === "handoffs" && pendingHandoff ? <><button onClick={() => onQueryChange(`请先使用 work.get_task_handoff_trail 核验待我签收的交接 ${pendingHandoff.id} 与文件/资料引用。若信息完整，我决定签收该交接，请使用 work.respond_to_task_handoff，handoffId 为 ${pendingHandoff.id}，任务当前版本为 ${task.version}。`)}>签收交接<Check size={13} /></button><button className="task-handoff-reject" onClick={() => onQueryChange(`请先使用 work.get_task_handoff_trail 核验交接 ${pendingHandoff.id}。我需要退回此交接，请向我询问退回原因后使用 work.respond_to_task_handoff，handoffId 为 ${pendingHandoff.id}，任务当前版本为 ${task.version}。`)}>退回</button></> : taskMode === "available" ? <button disabled={busyTask === task.id} onClick={() => void claim(task)}>{busyTask === task.id ? "承接中…" : "承接"}<ArrowRight size={13} /></button> : taskMode === "mine" && ["assigned", "claimed"].includes(task.status) ? <button disabled={busyTask === task.id} onClick={() => void transition(task, "in_progress")}>开始<ArrowRight size={13} /></button> : taskMode === "mine" && task.status === "in_progress" ? <button onClick={() => onQueryChange(`任务“${task.title}”已完成执行，请使用 work.update_my_task 工具将任务 ${task.id}（当前版本 ${task.version}）提交验收，并附上证据引用：`)}>提交验收<Check size={13} /></button> : taskMode === "mine" && task.status === "blocked" ? <button disabled={busyTask === task.id} onClick={() => void transition(task, "in_progress")}>解除阻塞<ArrowRight size={13} /></button> : taskMode === "mine" && task.status === "in_review" ? <button onClick={() => onQueryChange(`任务“${task.title}”已通过验收，请使用 work.update_my_task 工具将任务 ${task.id}（当前版本 ${task.version}）标记完成，证据引用为：`)}>完成<ArrowRight size={13} /></button> : <span>{formatRelative(task.dueAt)}</span>}</footer>
-          </article>})}
+            {task.missingFields.length ? <div className="task-template-missing">待补充：{task.missingFields.join("、")}</div> : null}
+            {taskHandoffs.length ? <details className="task-handoff-trail"><summary>交接链 · {taskHandoffs.length} 棒{taskHandoffs.some(({ status }) => status === "pending") ? " · 待签收" : ""}</summary>{taskHandoffs.slice(-4).map((handoff) => <div className="task-handoff-line" key={handoff.id}><span>{peopleById.get(handoff.fromAssigneeId)?.displayName ?? "前负责人"}<ArrowRight size={11} />{peopleById.get(handoff.toAssigneeId)?.displayName ?? "接收人"}</span><small>{handoff.status === "pending" ? "待签收" : handoff.status === "accepted" ? "已签收" : handoff.respondedBy === handoff.fromAssigneeId ? "已撤回" : "已退回"} · 文件/资料 {handoff.artifactRefs.length} · v{handoff.snapshot.packageVersion}</small><p>{handoff.note}</p>{handoff.currentProgress ? <p className="task-handoff-field"><b>当前进度</b>{handoff.currentProgress}</p> : null}{handoff.completedWork ? <p className="task-handoff-field"><b>已完成</b>{handoff.completedWork}</p> : null}{handoff.pendingWork ? <p className="task-handoff-field"><b>未完成</b>{handoff.pendingWork}</p> : null}{handoff.attentionPoints ? <p className="task-handoff-field"><b>注意</b>{handoff.attentionPoints}</p> : null}{handoff.responseNote ? <p className="task-handoff-response">{handoff.responseNote}</p> : null}</div>)}</details> : null}
+            <details className="task-timeline" onToggle={(event) => { if (event.currentTarget.open) void loadTimeline(task.id); }}><summary>时间线 · {timelines[task.id]?.length ?? 0} 条</summary>{(timelines[task.id] ?? []).map((item) => <div className="task-timeline-line" key={item.id}><span>{timelineEventCopy[item.eventType] ?? item.eventType}</span><small>{formatDate(item.occurredAt)}</small></div>)}</details>
+            {taskMode === "mine" && task.assigneeId && !taskHandoffs.some(({ status }) => status === "pending") && !["in_review", "completed", "cancelled"].includes(task.status) ? <button className="task-handoff-action" type="button" onClick={() => onQueryChange(`我需要正式交接任务“${task.title}”。请先通过 work.get_task_handoff_trail 核验现有交接链和文件/资料引用，再向我确认：交给哪位当前可用成员、交接说明、当前进度、已完成部分、未完成部分和注意事项；确认后用 work.initiate_task_handoff 发起版本 ${task.version} 的交接。`)}>发起交接<ArrowRight size={13} /></button> : null}
+            <footer>{task.isTemplate && taskMode === "published" ? <button onClick={() => onQueryChange(`补充任务模板“${task.title}”，模板 ID 为 ${task.id}，当前版本为 ${task.version}。请先询问我想补充哪些字段，再使用 work.update_task_template 更新；不要正式分派。`)}>补充模板<ArrowRight size={13} /></button> : taskMode === "handoffs" && pendingHandoff ? <><button disabled={busyTask === task.id} onClick={() => void acceptHandoff(pendingHandoff, task.version)}>{busyTask === task.id ? "处理中…" : "签收"}<Check size={13} /></button><button className="task-handoff-reject" disabled={busyTask === task.id} onClick={() => void rejectHandoff(pendingHandoff, task.version)}>退回</button></> : taskMode === "available" ? <button disabled={busyTask === task.id} onClick={() => void claim(task)}>{busyTask === task.id ? "承接中…" : "承接"}<ArrowRight size={13} /></button> : taskMode === "mine" && task.status === "in_progress" ? <button onClick={() => onQueryChange(`任务“${task.title}”已完成执行，请使用 work.update_my_task 工具将任务 ${task.id}（当前版本 ${task.version}）提交验收，并附上证据引用：`)}>提交验收<Check size={13} /></button> : taskMode === "mine" && task.status === "blocked" ? <button disabled={busyTask === task.id} onClick={() => void transition(task, "in_progress")}>解除阻塞<ArrowRight size={13} /></button> : taskMode === "mine" && task.status === "in_review" ? <button onClick={() => onQueryChange(`任务“${task.title}”已通过验收，请使用 work.update_my_task 工具将任务 ${task.id}（当前版本 ${task.version}）标记完成，证据引用为：`)}>完成<ArrowRight size={13} /></button> : <span>{formatRelative(task.dueAt)}</span>}{taskMode === "handoffs" && outgoingHandoffsByTask.has(task.id) ? <button className="task-handoff-revoke" type="button" disabled={busyTask === task.id} onClick={() => void revokeHandoff(outgoingHandoffsByTask.get(task.id)!, task.version)}>{busyTask === task.id ? "撤回中…" : "撤回交接"}<ArrowRight size={13} /></button> : null}</footer>
+          </article></div>}); })()}
           </div>
         </> : <div className="message-pool-list">
           {loading && !workspace ? <TaskRailState icon={LoaderCircle} title="正在同步消息" detail="" spinning /> : error && !workspace ? <TaskRailState icon={CircleAlert} title="消息池暂时不可用" detail={error} action={() => void loadWorkspace()} /> : !workspace?.messagePools.some((pool) => pool.messages.length) ? <TaskRailState icon={MessageCircle} title="还没有沟通消息" detail="推送只用于同步、征询和反馈，不会创建任务。" /> : workspace.messagePools.map((pool) => <section className="message-pool-section" key={pool.key}><header><span>{pool.scope === "company" ? "公司" : "部门"}</span><h3>{pool.name}</h3><b>{pool.messages.length}</b></header>{pool.messages.map((message) => <article className="message-pool-card" key={message.id}><h4>{message.subject}</h4><p>{message.content}</p><footer><span>{peopleById.get(message.authorId)?.displayName ?? "成员"} · {formatTime(message.createdAt)}</span><button type="button" onClick={() => onQueryChange(`我想针对消息“${message.subject}”补充反馈。请使用 communication.add_feedback 工具向消息 ${message.id} 写入以下反馈：`)}>{message.feedback.length ? `${message.feedback.length} 条反馈` : "反馈"}</button></footer>{message.feedback.length ? <details><summary>查看反馈</summary>{message.feedback.slice(-3).map((feedback) => <p className="message-pool-feedback" key={feedback.id}><b>{peopleById.get(feedback.authorId)?.displayName ?? "成员"}</b>{feedback.content}</p>)}</details> : null}</article>)}</section>)}

@@ -4,15 +4,17 @@ import type { TaskCommandService } from "@/src/modules/task-command/application/
 import { ToolRegistry } from "@/src/modules/agent/domain/tool";
 
 const claimSchema = z.object({ taskId: z.uuid(), expectedVersion: z.number().int().positive() }).strict();
-const updateSchema = transitionPackageSchema.extend({ taskId: z.uuid() }).strict();
+const updateSchema = transitionPackageSchema.extend({ taskId: z.uuid() }).strict().refine((value) => value.nextStatus !== "cancelled", { message: "取消任务请使用 work.cancel_task" });
 const respondHandoffSchema = respondToTaskHandoffSchema.extend({ handoffId: z.uuid() }).strict();
+const taskFactSchema = z.object({ taskId: z.uuid() }).strict();
 
 const createTemplateJsonSchema = {
   type: "object", additionalProperties: false,
   properties: {
     conversationId: { type: "string", format: "uuid" }, title: { type: "string" }, objective: { type: "string" }, description: { type: "string" }, acceptanceCriteria: { type: "string" },
     requiredSkills: { type: "array", items: { type: "string" } }, assignmentMode: { type: "string", enum: ["direct", "open_claim"] }, assigneeId: { type: "string", format: "uuid" }, targetOrgUnitId: { type: "string", format: "uuid" },
-    priority: { type: "string", enum: ["critical", "high", "medium", "low"] }, dueAt: { type: "string", format: "date-time" }, capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
+    priority: { type: "string", enum: ["critical", "high", "medium", "low"] }, dueAt: { type: "string", format: "date-time" }, startedAt: { type: "string", format: "date-time" }, estimatedDays: { type: "integer", minimum: 1, maximum: 365 },
+    capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
   }, required: ["conversationId", "title"],
 } as const;
 
@@ -21,7 +23,8 @@ const updateTemplateJsonSchema = {
   properties: {
     taskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 }, title: { type: "string" }, objective: { type: "string" }, description: { type: "string" }, acceptanceCriteria: { type: "string" },
     requiredSkills: { type: "array", items: { type: "string" } }, assignmentMode: { type: "string", enum: ["direct", "open_claim"] }, assigneeId: { type: ["string", "null"], format: "uuid" }, targetOrgUnitId: { type: ["string", "null"], format: "uuid" },
-    priority: { type: "string", enum: ["critical", "high", "medium", "low"] }, dueAt: { type: "string", format: "date-time" }, capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
+    priority: { type: "string", enum: ["critical", "high", "medium", "low"] }, dueAt: { type: "string", format: "date-time" }, startedAt: { type: "string", format: "date-time" }, estimatedDays: { type: "integer", minimum: 1, maximum: 365 },
+    capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
   }, required: ["taskId", "expectedVersion"],
 } as const;
 
@@ -33,15 +36,16 @@ const publishJsonSchema = {
     packages: { type: "array", minItems: 1, maxItems: 20, items: { type: "object", additionalProperties: false, properties: {
       title: { type: "string" }, description: { type: "string" }, acceptanceCriteria: { type: "string" }, requiredSkills: { type: "array", items: { type: "string" } },
       assignmentMode: { type: "string", enum: ["direct", "open_claim"] }, assigneeId: { type: "string", format: "uuid" }, targetOrgUnitId: { type: "string", format: "uuid" }, priority: { type: "string", enum: ["critical", "high", "medium", "low"] },
-      dueAt: { type: "string", format: "date-time" }, capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
-    }, required: ["title", "description", "acceptanceCriteria", "requiredSkills", "assignmentMode", "priority", "dueAt", "capacityPoints"] } },
-  }, required: ["conversationId", "title", "objective", "priority", "dueAt", "packages"],
+      dueAt: { type: "string", format: "date-time" }, startedAt: { type: "string", format: "date-time" }, estimatedDays: { type: "integer", minimum: 1, maximum: 365 },
+      capacityPoints: { type: "integer", minimum: 1, maximum: 40 },
+    }, required: ["title"] } },
+  }, required: ["conversationId", "title", "packages"],
 } as const;
 
 export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCommandService) {
   registry.register({
     id: "work.create_task_template", skillId: "work-orchestration", version: 1,
-    description: "根据用户已经提供的最少信息创建一个局部任务模板；未提供的目标、说明、负责人或承接范围、截止时间、验收标准、优先级、容量点和技能会标记为待补充，不会分派给个人或部门，也不会进入可承接任务池。该 Tool 不替代正式发布门禁。",
+    description: "仅在用户明确要求“先建草稿/模板”时使用：创建当前用户可见的任务模板，缺失字段标记为待补充，不进入可承接任务池、不对外分派。用户要求直接发布/下发/等待承接时不要使用本工具，改用 work.publish_task_bundle。",
     requiredPermissions: ["work_task:create"], riskLevel: 1, confirmationPolicy: "never", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 2,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"], inputJsonSchema: createTemplateJsonSchema, inputSchema: createTaskTemplateSchema,
     preview(input) { const value = createTaskTemplateSchema.parse(input); return `将创建任务模板“${value.title}”，缺失字段会在模板中标记，暂不对外分派。`; },
@@ -57,7 +61,7 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
   });
   registry.register({
     id: "work.publish_task_bundle", skillId: "work-orchestration", version: 1,
-    description: "正式发布一个工作使命并一次性创建多个可验收任务包；每包必须定向至已知成员，或定向至一个部门供该部门成员承接，二者不可同时填写：direct 只填 assigneeId，open_claim 只填 targetOrgUnitId。调用本 Tool 只生成待人工确认的提案，不会直接创建任务；用户明确要求正式发布且参数齐全时必须调用，不要改为纯文字预览。",
+    description: "发布一个工作使命并创建任务包：用户怎么写就怎么发，把用户已说明的内容按原样发布，验收标准、截止时间、优先级、容量点、负责人等缺失字段由系统标记为“待补充”，不要要求用户先补全，也不要代为编造。用户说“发布/发下去/挂到任务栏/等待有人承接”时即调用本工具（生成待人工确认的提案）；只有用户明确要求“先建草稿/模板”时才改用 work.create_task_template。",
     requiredPermissions: ["work_task:create"], riskLevel: 2, confirmationPolicy: "always", sideEffect: "internal_idempotent", timeoutMs: 15_000, maxAttempts: 3,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"], inputJsonSchema: publishJsonSchema, inputSchema: publishMissionSchema,
     preview(input) { const value = publishMissionSchema.parse(input); return `将发布使命“${value.title}”，包含 ${value.packages.length} 个任务包。`; },
@@ -75,12 +79,12 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
   });
   registry.register({
     id: "work.update_my_task", skillId: "work-orchestration", version: 1,
-    description: "推进当前用户负责或发布的任务包状态；完成时必须给出可核验的证据引用，阻塞时必须说明原因。",
+    description: "推进当前用户负责或发布的任务包状态（不含取消）：开始、阻塞、提交验收、完成；完成时必须给出可核验的证据引用，阻塞时必须说明原因。取消任务请使用 work.cancel_task。",
     requiredPermissions: ["work_task:update"], riskLevel: 2, confirmationPolicy: "risk_based", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 3,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
     inputJsonSchema: { type: "object", additionalProperties: false, properties: {
       taskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 },
-      nextStatus: { type: "string", enum: ["in_progress", "blocked", "in_review", "completed", "cancelled"] },
+      nextStatus: { type: "string", enum: ["in_progress", "blocked", "in_review", "completed"] },
       evidenceRefs: { type: "array", items: { type: "string" } }, blockedReason: { type: "string" },
     }, required: ["taskId", "expectedVersion", "nextStatus"] },
     inputSchema: updateSchema,
@@ -88,13 +92,25 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
     execute(context, input) { const value = updateSchema.parse(input); const { taskId, ...transition } = value; return service.transitionPackage(context, taskId, transition); },
   });
   registry.register({
+    id: "work.cancel_task", skillId: "work-orchestration", version: 1,
+    description: "取消（置为 cancelled）当前用户负责或发布的任务包，仅用于用户明确要求取消/删除任务或清理重复任务时。本操作不可逆（保留审计），调用前必须先经用户确认目标任务；调用本工具生成待人工确认的提案，确认后才执行。物理删除不存在。",
+    requiredPermissions: ["work_task:update"], riskLevel: 2, confirmationPolicy: "always", sideEffect: "internal_idempotent", timeoutMs: 15_000, maxAttempts: 3,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { taskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 } }, required: ["taskId", "expectedVersion"] },
+    inputSchema: z.object({ taskId: z.uuid(), expectedVersion: z.number().int().positive() }).strict(),
+    preview(input) { const value = z.object({ taskId: z.uuid(), expectedVersion: z.number().int().positive() }).strict().parse(input); return `将取消任务包 ${value.taskId}（版本 ${value.expectedVersion}），取消后不可恢复并保留审计。`; },
+    execute(context, input) { const value = z.object({ taskId: z.uuid(), expectedVersion: z.number().int().positive() }).strict().parse(input); return service.transitionPackage(context, value.taskId, { expectedVersion: value.expectedVersion, nextStatus: "cancelled" }); },
+  });
+  registry.register({
     id: "work.initiate_task_handoff", skillId: "work-orchestration", version: 1,
     description: "发起一项正式任务的交接。系统会冻结当前任务版本、任务说明、验收标准、已有证据和版本化交付物快照；原负责人会保持责任，直到目标接收人签收。交付物必须使用当前上下文中已登记的 artifactId，不能填写任意文件路径或 URL。",
     requiredPermissions: ["work_task:handoff"], riskLevel: 2, confirmationPolicy: "always", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 3,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
     inputJsonSchema: { type: "object", additionalProperties: false, properties: {
-      taskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 }, toAssigneeId: { type: "string", format: "uuid" }, note: { type: "string" }, artifactIds: { type: "array", items: { type: "string", format: "uuid" }, maxItems: 40 },
-    }, required: ["taskId", "expectedVersion", "toAssigneeId", "note", "artifactIds"] },
+      taskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 }, toAssigneeId: { type: "string", format: "uuid" }, note: { type: "string" },
+      currentProgress: { type: "string" }, completedWork: { type: "string" }, pendingWork: { type: "string" }, attentionPoints: { type: "string" },
+      artifactIds: { type: "array", items: { type: "string", format: "uuid" }, maxItems: 40 },
+    }, required: ["taskId", "expectedVersion", "toAssigneeId", "note", "currentProgress", "completedWork", "pendingWork", "artifactIds"] },
     inputSchema: initiateTaskHandoffSchema,
     preview(input) { const value = initiateTaskHandoffSchema.parse(input); return `发起任务 ${value.taskId} 的交接，冻结当前版本并交由 ${value.toAssigneeId} 签收。`; },
     execute(context, input, execution) { return service.initiateTaskHandoff(context, initiateTaskHandoffSchema.parse(input), { source: "agent", sourceRunId: execution?.agentRunId }); },
@@ -112,6 +128,16 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
     execute(context, input, execution) { const value = respondHandoffSchema.parse(input); const { handoffId, ...response } = value; return service.respondToTaskHandoff(context, handoffId, response, { source: "agent", sourceRunId: execution?.agentRunId }); },
   });
   registry.register({
+    id: "work.revoke_task_handoff", skillId: "work-orchestration", version: 1,
+    description: "撤回当前用户作为原负责人发起的待签收交接（对方尚未签收）。撤回后交接作废、任务责任继续留在原负责人；本工具只生成待人工确认的撤回提案，确认后才执行。",
+    requiredPermissions: ["work_task:update"], riskLevel: 2, confirmationPolicy: "always", sideEffect: "internal_idempotent", timeoutMs: 15_000, maxAttempts: 3,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { handoffId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 } }, required: ["handoffId", "expectedVersion"] },
+    inputSchema: z.object({ handoffId: z.uuid(), expectedVersion: z.number().int().positive() }).strict(),
+    preview(input) { const value = z.object({ handoffId: z.uuid(), expectedVersion: z.number().int().positive() }).strict().parse(input); return `将撤回交接 ${value.handoffId}（任务版本 ${value.expectedVersion}），撤回后对方不能再签收，任务继续留在原负责人。`; },
+    execute(context, input, execution) { const value = z.object({ handoffId: z.uuid(), expectedVersion: z.number().int().positive() }).strict().parse(input); return service.revokeTaskHandoff(context, value.handoffId, value.expectedVersion, { source: "agent", sourceRunId: execution?.agentRunId }); },
+  });
+  registry.register({
     id: "work.get_task_handoff_trail", skillId: "work-orchestration", version: 1,
     description: "查询当前用户有权读取的任务交接链，返回每一棒的交接说明、冻结任务快照、文件/资料引用、签收或退回结果。回答交接进度、责任归属或文件连续性前应优先使用本工具核验。",
     requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
@@ -122,12 +148,52 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
     execute(context, input) { return service.taskHandoffTrail(context, taskHandoffTrailSchema.parse(input).taskId); },
   });
   registry.register({
+    id: "work.get_task_progress", skillId: "work-orchestration", version: 1,
+    description: "只读查询当前用户有权读取的任务进度事实卡：负责人、开始/截止时间、工期、状态、临期/逾期标记、全生命周期事件时间线和交接链。回答任务进度、剩余工期或卡在哪个环节前应优先使用本工具核验，不得猜测。",
+    requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { taskId: { type: "string", format: "uuid" } }, required: ["taskId"] },
+    inputSchema: taskFactSchema,
+    preview(input) { const value = taskFactSchema.parse(input); return `读取任务 ${value.taskId} 的进度事实卡。`; },
+    execute(context, input) { return service.taskProgressFact(context, taskFactSchema.parse(input).taskId); },
+  });
+  registry.register({
+    id: "work.get_member_workload", skillId: "work-orchestration", version: 1,
+    description: "只读查询当前租户成员负载：进行中任务数、7 天内到期任务数、容量点合计。定向分派任务给某位负责人之前应使用本工具核验负载，避免把任务压给过载成员。",
+    requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: {}, required: [] },
+    inputSchema: z.object({}).strict(),
+    preview() { return "读取成员负载视图。"; },
+    execute(context) { return service.memberWorkload(context); },
+  });
+  registry.register({
+    id: "work.find_task", skillId: "work-orchestration", version: 1,
+    description: "按标题/描述/所属使命名称搜索当前用户可见的任务。当用户询问某个任务是否存在、在哪里查看、按名称找任务时，必须先调用本工具核验；只有本工具返回空任务列表时才可以回答“未找到”，不得仅凭记忆或知识库检索下结论。",
+    requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { keyword: { type: "string", minLength: 1, maxLength: 160 }, projectId: { type: "string", format: "uuid" } }, required: ["keyword"] },
+    inputSchema: z.object({ keyword: z.string().trim().min(1).max(160), projectId: z.uuid().optional() }).strict(),
+    preview(input) { const value = z.object({ keyword: z.string() }).parse(input); return `按“${value.keyword}”搜索当前可见任务。`; },
+    execute(context, input) { return service.findTask(context, z.object({ keyword: z.string().trim().min(1).max(160), projectId: z.uuid().optional() }).strict().parse(input)); },
+  });
+  registry.register({
+    id: "work.project_task_inventory", skillId: "work-orchestration", version: 1,
+    description: "一次列出指定项目下当前用户可见的全部任务（含各状态与所在分类，含模板与已完成，供筛选归类）。当用户要求“列出某项目的任务/未完成任务/盘点项目任务”时，应优先调用本工具获得全量清单，不要用多个关键词反复调用 work.find_task 猜测。",
+    requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { projectId: { type: "string", format: "uuid" } }, required: ["projectId"] },
+    inputSchema: z.object({ projectId: z.uuid() }).strict(),
+    preview(input) { const value = z.object({ projectId: z.uuid() }).parse(input); return `盘点项目 ${value.projectId} 的可见任务。`; },
+    execute(context, input) { return service.projectTaskInventory(context, z.object({ projectId: z.uuid() }).strict().parse(input)); },
+  });
+  registry.register({
     id: "communication.publish_message", skillId: "company-communication", version: 1,
-    description: "将沟通、同步、征询或反馈整理后放入当前用户可见的公司或部门消息池。它不是任务：不产生负责人、截止时间、验收、任务状态或确认门禁。",
+    description: "将沟通、同步、征询或反馈整理后放入当前用户可见的公司或部门消息池。它不是任务：不产生负责人、截止时间、验收、任务状态或确认门禁。kind=announcement 用于公告/置顶，kind=notice 用于普通通知或提醒。",
     requiredPermissions: ["message_pool:publish"], riskLevel: 1, confirmationPolicy: "never", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 2,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
     inputJsonSchema: { type: "object", additionalProperties: false, properties: {
-      poolKey: { type: "string", description: "只能使用上下文中可见消息池的 key；company 为全公司，部门使用对应的 orgUnit UUID。" }, subject: { type: "string" }, content: { type: "string" },
+      poolKey: { type: "string", description: "只能使用上下文中可见消息池的 key；company 为全公司，部门使用对应的 orgUnit UUID。" }, subject: { type: "string" }, content: { type: "string" }, kind: { type: "string", enum: ["announcement", "notice"], description: "公告或通知，缺省为 notice" },
     }, required: ["poolKey", "subject", "content"] },
     inputSchema: publishPoolMessageSchema,
     preview(input) { const value = publishPoolMessageSchema.parse(input); return `将沟通“${value.subject}”发送至消息池 ${value.poolKey}。`; },

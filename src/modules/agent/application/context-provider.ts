@@ -106,17 +106,19 @@ export class ManagementContextProvider {
     }) : undefined;
     if (memory) citations.push(...memory.citations);
     const summary = [businessSummary, memory?.summary].filter(Boolean).join("\n");
-    if (this.memory && input) {
+    const expectedVersions = { [snapshot.project.id]: snapshot.project.version };
+    for (const item of citations.filter(({ objectType }) => objectType === "work_package")) if (item.objectVersion) expectedVersions[item.objectId] = item.objectVersion;
+    const dataClassification = mostRestrictiveClassification([
+      ...citations.map(({ classification }) => classification),
+      classifyUntrustedText(summary),
+    ]);
+    // 受限上下文不写入长期/情景记忆，避免受限拒答自我复制并污染后续轮次。
+    if (this.memory && input && dataClassification !== "restricted") {
       await Promise.all([
         this.memory.captureSituation(context, { projectId, runId: input.runId, summary: businessSummary, citations }),
         this.memory.captureContext(context, { conversationId: input.conversationId, projectId, runId: input.runId, summary: businessSummary, citations }),
       ]);
     }
-    const expectedVersions = { [snapshot.project.id]: snapshot.project.version };
-    for (const item of citations.filter(({ objectType }) => objectType === "work_package")) if (item.objectVersion) expectedVersions[item.objectId] = item.objectVersion;
-    return { projectId, summary, citations, expectedVersions, dataClassification: mostRestrictiveClassification([
-      ...citations.map(({ classification }) => classification),
-      classifyUntrustedText(summary),
-    ]) };
+    return { projectId, summary, citations, expectedVersions, dataClassification };
   }
 }

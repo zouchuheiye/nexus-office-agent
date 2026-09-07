@@ -219,3 +219,15 @@
 - D-002 · 2026-08-05：由“可交互 MVP 后再选择单一集成”调整为“文档先行，完整开发网页 + 飞书 + 钉钉 + 企业微信，后续自建客户端”；原因是用户明确确认完整范围与交付顺序。影响：项目从原型转为 T3 长期工程，必须先完成 M0 设计 Gate，再按 M1～M8 实施。证据 E-006、E-007；确认来源：当前用户目标。
 - D-003 · 2026-08-05：将 M7 分成“本地生产工程 Gate”和“真实企业发布 Gate”。前者允许在无外部凭据时验证 OIDC 协议、配置门禁、Secret broker、容器、性能和加密恢复内核；后者不得在真实 IdP、数据库灾备、三平台企业和试点缺失时宣称通过。证据 E-019、E-020。
 - D-001 · 2026-08-05：首版采用“可交互前端 + 服务端真实模型接口 + 演示数据”的纵向切片；该版本现仅作为视觉概念验证。证据 E-001 至 E-005。
+
+- D-041 · 2026-08-27：用户确认“管理任务进度”落地范围。目标：一个任务派下去可追踪——有人承接、有开始/截止/工期、可交接、进度可见，不再纯靠人脑。第一批范围（本次开发）：RQ-1 正式发布必填门禁+工期字段（F-077）、RQ-2 全生命周期时间线（F-078）、RQ-3 临期/逾期状态与分组（F-079）、RQ-4 AI 只读任务事实卡（F-080）。第二批规划（F-081～F-086）：标准交接单、任务进度看板、周期进度摘要、成员负载、阻塞升级、进度报表。全部工作与证据记录在本台账；代码改动不提交远端，待用户确认。不改变主对话统一入口定位（D-011）；复用现有 task-command 模块与 work_packages/work_task_events/work_task_handoffs 表，新增 started_at/estimated_days 迁移、时间线与临期逾期查询、只读进度工具。证据：E-064（2026-08-27 本地工程完成）。
+
+
+- D-042 · 2026-08-27：用户确认第二批范围：F-081 标准交接单、F-082 任务进度看板页。方案：交接单结构化字段（当前进度/已完成/未完成/注意事项，与现有资料引用一并存交接记录并随签收链保留）；看板页新增只读 board 接口与模块页，按状态分列并以逾期/临期高亮，展示负责人/截止/剩余天数。全部记录于本台账，代码不提交远端。证据：E-065（2026-08-27 本地工程完成）。
+
+- D-043 · 2026-08-27：用户确认第三批范围（"两步都做完"）：⏰ 后台到期提醒 + F-083 周期进度摘要、F-084 成员负载、F-085 阻塞升级、F-086 进度报表导出。方案：
+  - 到期提醒（后台小闹钟）：新增扫描脚本 scripts/task-reminder.ts（支持 --once / --watch 每 N 分钟轮询，默认 60 分钟），对未完成任务按 dueState 分"临期（≤72h）/ 逾期"，向公司消息池发布提醒；source_run_id=	ask-reminder:{packageId}:{kind}:{YYYY-MM-DD} 幂等去重（每天每任务每种提醒最多一条）。F-085 同扫描升级：blocked 超阈值（默认 24h，可用 WORK_BLOCKED_ESCALATION_HOURS 配置）发布 	ask-escalation:{packageId}:{date} 升级消息，通知发布人与负责人。
+  - F-084 成员负载：WorkPerson 扩展 inProgressTaskCount / dueSoonTaskCount / capacityPoints；Postgres listPeople SQL 增加统计（进行中数、7 天内到期数、容量点合计），InMemory 同步；新增只读 Agent 工具 work.get_member_workload；定向分派时若目标负载过高返回 warnings（不阻断）；看板人员区展示负载徽标。
+  - F-086 进度报表导出：service.exportReport + GET /api/v1/task-command/reports/export（format=csv|json，按 assigneeId / missionId / from / to 过滤，CSV 带 UTF-8 BOM 便于 Excel 打开）；看板页加"导出报表"按钮。
+  - F-083 周期摘要：service.generatePeriodicSummary（scope=daily|weekly，汇总 我的/我发布/我负责 的完成/进行/逾期/卡住），脚本 scripts/task-summary.ts 生成摘要并发布到消息池（source_run_id=	ask-summary:{scope}:{period} 幂等），人确认后发出。
+  全部记录于本台账，代码不提交远端。证据：E-103（2026-08-27 本地工程完成）。

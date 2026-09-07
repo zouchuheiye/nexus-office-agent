@@ -16,6 +16,7 @@ import {
   GitBranch,
   GitCommitHorizontal,
   Goal,
+  Kanban,
   Inbox,
   LayoutDashboard,
   Library,
@@ -38,7 +39,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ManagementLoopView } from "@/components/management-loop-view";
 import { IntegrationCenterView } from "@/components/integration-center-view";
 import { GovernanceCenterView } from "@/components/governance-center-view";
@@ -48,6 +49,7 @@ import { EnterpriseGovernanceView } from "@/components/enterprise-governance-vie
 import { ManagementIntelligenceView } from "@/components/management-intelligence-view";
 import { PwaLifecycle } from "@/components/pwa-lifecycle";
 import { WorkCommandCenter } from "@/components/work-command-center";
+import { TaskProgressBoard } from "@/components/task-progress-board";
 import { PiCodingWorkbench } from "@/components/pi-coding-workbench";
 import { PiGovernanceConsole } from "@/components/pi-governance-console";
 import { PiOperationsConsole } from "@/components/pi-operations-console";
@@ -137,6 +139,7 @@ const primaryNav: NavItem[] = [
   { id: "management-intelligence", label: "经营中枢", icon: Network },
   { id: "inbox", label: "统一收件箱", icon: Inbox },
   { id: "projects", label: "项目与任务", icon: BriefcaseBusiness },
+  { id: "task-progress", label: "任务进度", icon: Kanban },
   { id: "approvals", label: "智能审批", icon: FileCheck2 },
   { id: "people", label: "组织与人才", icon: Users },
   { id: "goals", label: "目标与绩效", icon: Goal },
@@ -223,7 +226,7 @@ export function OfficeShell() {
     if (persistedMessages.length) setMessages(persistedMessages);
   }, []);
 
-  const activeLabel = useMemo(() => active === "integrations" ? "系统与集成" : active === "client" ? "设备与客户端" : active === "enterprise-governance" ? "权限与治理" : primaryNav.find(({ id }) => id === active)?.label ?? "管理驾驶舱", [active]);
+  const activeLabel = useMemo(() => active === "integrations" ? "系统与集成" : active === "client" ? "设备与客户端" : active === "enterprise-governance" ? "权限与治理" : primaryNav.find(({ id }) => id === active)?.label ?? "项目管理", [active]);
   const selectedProject = bootstrap?.projects.find(({ id }) => id === selectedProjectId) ?? null;
   const filteredProjects = useMemo(() => {
     const term = searchTerm.trim().toLocaleLowerCase("zh-CN");
@@ -407,6 +410,54 @@ export function OfficeShell() {
   }
 
   const identity = bootstrap?.identity;
+
+  const viewRenderers: Record<string, () => ReactNode> = {
+    command: () => <>
+      {bootstrap?.dataMode === "development_fixture" ? <div className="fixture-banner"><ShieldAlert size={14} /><span><strong>本地验证模式</strong> 对话与任务记录来自开发工作区，不代表真实企业。</span></div> : null}
+      <WorkCommandCenter
+        messages={messages}
+        query={query}
+        isThinking={isThinking}
+        confirmingProposal={confirmingProposal}
+        onQueryChange={setQuery}
+        onSubmit={askAgent}
+        onConfirmProposal={(proposal) => void confirmAgentProposal(proposal)}
+        onHydrate={hydratePrimaryConversation}
+        onNotice={showNotice}
+      />
+    </>,
+    coding: () => <PiCodingWorkbench workspaceId={selectedProjectId} onNotice={showNotice} />,
+    "agent-development": () => <AgentDevelopmentWorkflow onNotice={showNotice} />,
+    "agent-governance": () => <PiGovernanceConsole onNotice={showNotice} />,
+    "agent-operations": () => <PiOperationsConsole />,
+    today: () => <TodayView
+      bootstrap={bootstrap}
+      bootstrapLoading={bootstrapLoading}
+      bootstrapError={bootstrapError}
+      selectedProjectId={selectedProjectId}
+      snapshot={snapshot}
+      snapshotLoading={snapshotLoading}
+      snapshotError={snapshotError}
+      onSelectProject={setSelectedProjectId}
+      onRefresh={() => bootstrapError ? void loadBootstrap() : selectedProjectId ? void loadSnapshot(selectedProjectId) : void loadBootstrap()}
+      onOpenProject={() => chooseNav("projects")}
+      onAsk={(text) => { chooseNav("command"); setQuery(text); }}
+      onConnect={() => chooseNav("integrations")}
+    />,
+    projects: () => (selectedProjectId && identity ? <ManagementLoopView projectId={selectedProjectId} actorId={identity.actorId} onNotice={showNotice} /> : <ProjectRequiredState onReturn={() => chooseNav("today")} />),
+    "task-progress": () => <TaskProgressBoard />,
+    integrations: () => <IntegrationCenterView onNotice={showNotice} />,
+    client: () => <ClientPlatformView onNotice={showNotice} />,
+    "management-intelligence": () => <ManagementIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} />,
+    "enterprise-governance": () => <EnterpriseGovernanceView actorId={identity?.actorId ?? null} selectedProjectId={selectedProjectId} onNotice={showNotice} />,
+    approvals: () => <GovernanceCenterView onNotice={showNotice} focus="approvals" />,
+    knowledge: () => <GovernanceCenterView onNotice={showNotice} focus="knowledge" />,
+    goals: () => <EnterpriseIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} focus="goals" />,
+    insights: () => <EnterpriseIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} focus="insights" />,
+    people: () => <EnterpriseIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} focus="people" />,
+  };
+  const renderView = viewRenderers[active] ?? (() => <ModuleBoundaryView id={active} onConnect={() => chooseNav("integrations")} />);
+
   return (
     <div className={`app-shell ${active === "command" ? "command-mode" : ""} ${active === "coding" ? "coding-mode" : ""} ${active === "agent-development" ? "development-mode" : ""} ${active !== "command" && active !== "coding" && active !== "agent-development" && agentOpen ? "with-agent" : ""}`}>
       <PwaLifecycle />
@@ -442,41 +493,7 @@ export function OfficeShell() {
         </header>
 
         <section className="content-canvas">
-          {active === "command" ? <>
-            {bootstrap?.dataMode === "development_fixture" ? <div className="fixture-banner"><ShieldAlert size={14} /><span><strong>本地验证模式</strong> 对话与任务记录来自开发工作区，不代表真实企业。</span></div> : null}
-            <WorkCommandCenter
-              messages={messages}
-              query={query}
-              isThinking={isThinking}
-              confirmingProposal={confirmingProposal}
-              onQueryChange={setQuery}
-              onSubmit={askAgent}
-              onConfirmProposal={(proposal) => void confirmAgentProposal(proposal)}
-              onHydrate={hydratePrimaryConversation}
-              onNotice={showNotice}
-            />
-          </> : active === "coding" ? <PiCodingWorkbench workspaceId={selectedProjectId} onNotice={showNotice} /> : active === "agent-development" ? <AgentDevelopmentWorkflow onNotice={showNotice} /> : active === "agent-governance" ? <PiGovernanceConsole onNotice={showNotice} /> : active === "agent-operations" ? <PiOperationsConsole /> : active === "today" ? <TodayView
-            bootstrap={bootstrap}
-            bootstrapLoading={bootstrapLoading}
-            bootstrapError={bootstrapError}
-            selectedProjectId={selectedProjectId}
-            snapshot={snapshot}
-            snapshotLoading={snapshotLoading}
-            snapshotError={snapshotError}
-            onSelectProject={setSelectedProjectId}
-            onRefresh={() => bootstrapError ? void loadBootstrap() : selectedProjectId ? void loadSnapshot(selectedProjectId) : void loadBootstrap()}
-            onOpenProject={() => chooseNav("projects")}
-            onAsk={(text) => { chooseNav("command"); setQuery(text); }}
-            onConnect={() => chooseNav("integrations")}
-          /> : active === "projects" ? (
-            selectedProjectId && identity ? <ManagementLoopView projectId={selectedProjectId} actorId={identity.actorId} onNotice={showNotice} /> : <ProjectRequiredState onReturn={() => chooseNav("today")} />
-          ) : active === "integrations" ? <IntegrationCenterView onNotice={showNotice} />
-            : active === "client" ? <ClientPlatformView onNotice={showNotice} />
-              : active === "management-intelligence" ? <ManagementIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} />
-              : active === "enterprise-governance" ? <EnterpriseGovernanceView actorId={identity?.actorId ?? null} selectedProjectId={selectedProjectId} onNotice={showNotice} />
-                : active === "approvals" || active === "knowledge" ? <GovernanceCenterView onNotice={showNotice} focus={active} />
-                  : active === "goals" || active === "insights" || active === "people" ? <EnterpriseIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} focus={active} />
-                    : <ModuleBoundaryView id={active} onConnect={() => chooseNav("integrations")} />}
+          {renderView()}
         </section>
       </main>
 

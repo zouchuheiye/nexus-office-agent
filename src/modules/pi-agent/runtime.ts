@@ -38,173 +38,101 @@ import { PostgresPiChangeDeliveryStore } from "@/src/modules/pi-agent/infrastruc
 import { PiChangeDeliveryApprovalObjectVersionReader } from "@/src/modules/pi-agent/infrastructure/change-delivery-approval";
 import { createPiChangeDeliveryGateways } from "@/src/modules/pi-agent/infrastructure/change-delivery-gateway";
 import type { PiChangeDeliveryEvidenceReader } from "@/src/modules/pi-agent/domain/change-delivery-contracts";
+import { moduleRuntime } from "@/src/platform/runtime/module-runtime";
 
-const runtime = globalThis as typeof globalThis & {
-  __nexusPiAgentService?: PiAgentService;
-  __nexusPiWorkspaceService?: PiWorkspaceService;
-  __nexusPiResourceRegistry?: PiResourceRegistryService;
-  __nexusPiMcpRegistry?: McpRegistryService;
-  __nexusPiApprovalService?: PiApprovalService;
-  __nexusPiSessionTreeService?: SessionTreeService;
-  __nexusPiDelegationService?: DelegationService;
-  __nexusPiProfileRegistry?: StaticAgentProfileRegistry | PostgresAgentProfileRegistry;
-  __nexusPiModelGateway?: EnterpriseModelGateway;
-  __nexusPiTelemetryService?: PiTelemetryService;
-  __nexusPiQuotaService?: PiQuotaService;
-  __nexusPiSecurityResilienceService?: PiSecurityResilienceService;
-  __nexusPiPreproductionService?: PiPreproductionService;
-  __nexusPiPilotService?: PiPilotService;
-  __nexusPiReleaseGovernanceService?: PiReleaseGovernanceService;
-  __nexusPiChangeDeliveryService?: PiChangeDeliveryService;
-  __nexusPiAgentRuntimeVersion?: number;
+type PiAgentRuntimeBundle = {
+  agent: PiAgentService;
+  workspace: PiWorkspaceService;
+  resourceRegistry: PiResourceRegistryService;
+  mcpRegistry: McpRegistryService;
+  approval: PiApprovalService;
+  sessionTree: SessionTreeService;
+  delegation: DelegationService;
+  profileRegistry: StaticAgentProfileRegistry | PostgresAgentProfileRegistry;
+  modelGateway: EnterpriseModelGateway;
+  telemetry: PiTelemetryService;
+  quota: PiQuotaService;
+  securityResilience: PiSecurityResilienceService;
+  preproduction: PiPreproductionService;
+  pilot: PiPilotService;
+  releaseGovernance: PiReleaseGovernanceService;
+  changeDelivery: PiChangeDeliveryService;
 };
 
-export function getPiAgentService(): PiAgentService {
-  if (runtime.__nexusPiAgentRuntimeVersion !== 16 || !runtime.__nexusPiAgentService || !runtime.__nexusPiWorkspaceService || !runtime.__nexusPiResourceRegistry || !runtime.__nexusPiMcpRegistry || !runtime.__nexusPiApprovalService || !runtime.__nexusPiSessionTreeService || !runtime.__nexusPiDelegationService || !runtime.__nexusPiProfileRegistry || !runtime.__nexusPiModelGateway || !runtime.__nexusPiTelemetryService || !runtime.__nexusPiQuotaService || !runtime.__nexusPiSecurityResilienceService || !runtime.__nexusPiPreproductionService || !runtime.__nexusPiPilotService || !runtime.__nexusPiReleaseGovernanceService || !runtime.__nexusPiChangeDeliveryService) {
-    const database = process.env.DATABASE_URL ? createPostgresDatabase(process.env.DATABASE_URL) : undefined;
-    const store = database ? new PostgresPiSessionStore(database) : new InMemoryPiSessionStore();
-    const runStore = database ? new PostgresPiRunStore(database) : new InMemoryPiRunStore();
-    const resourceRegistry = createPiResourceRegistry(database ? new PostgresPiResourceRegistryStore(database) : new InMemoryPiResourceRegistryStore());
-    const mcpRegistry = createMcpRegistry(database ? new PostgresMcpRegistryStore(database) : new InMemoryMcpRegistryStore());
-    const approvalStore = database ? new PostgresPiApprovalStore(database) : new InMemoryPiApprovalStore();
-    const approvalEvents = database ? new PostgresPiApprovalEventSink(database) : new InMemoryPiApprovalEventSink();
-    const approvalPolicy = new ApprovalPolicyResolver(new FailClosedPiApprovalApproverDirectory(), { policyVersion: 1 });
-    const treeStore = database ? new PostgresPiSessionTreeStore(database) : new InMemoryPiSessionTreeStore();
-    const profileRegistry = database ? new PostgresAgentProfileRegistry(database) : new StaticAgentProfileRegistry();
-    const delegationStore = database ? new PostgresPiDelegationStore(database) : new InMemoryPiDelegationStore();
-    const m30Store = database ? new PostgresPiM30Store(database) : undefined;
-    const m31Store = database ? new PostgresPiSecurityResilienceStore(database) : new InMemoryPiSecurityResilienceStore();
-    const securityResilience = new PiSecurityResilienceService(m31Store);
-    const m32Store = database ? new PostgresPiPreproductionStore(database) : new InMemoryPiPreproductionStore();
-    const m33Store = database ? new PostgresPiPilotStore(database) : new InMemoryPiPilotStore();
-    const m34Store = database ? new PostgresPiReleaseGovernanceStore(database) : new InMemoryPiReleaseGovernanceStore();
-    runtime.__nexusPiResourceRegistry = resourceRegistry;
-    runtime.__nexusPiMcpRegistry = mcpRegistry;
-    runtime.__nexusPiSessionTreeService = new SessionTreeService({ sessionStore: store, treeStore });
-    runtime.__nexusPiDelegationService = new DelegationService(store, delegationStore, profileRegistry, undefined, false);
-    runtime.__nexusPiProfileRegistry = profileRegistry;
-    runtime.__nexusPiModelGateway = new EnterpriseModelGateway({ store: m30Store ?? new InMemoryPiModelRouteStore(), safety: securityResilience });
-    runtime.__nexusPiTelemetryService = new PiTelemetryService(m30Store ?? new InMemoryPiObservabilityStore());
-    runtime.__nexusPiQuotaService = new PiQuotaService(m30Store ?? new InMemoryPiQuotaStore());
-    runtime.__nexusPiSecurityResilienceService = securityResilience;
-    const preproductionProbe = database
-      ? new CompositePiPreproductionProbe([new FailClosedPiPreproductionProbe(), new McpAuditScopePreproductionProbe(new PostgresMcpAuditScopeReadinessStore(database))])
-      : new FailClosedPiPreproductionProbe();
-    runtime.__nexusPiPreproductionService = new PiPreproductionService(m32Store, preproductionProbe);
-    runtime.__nexusPiPilotService = new PiPilotService(m33Store);
-    runtime.__nexusPiReleaseGovernanceService = new PiReleaseGovernanceService(m34Store);
-    runtime.__nexusPiAgentService = new PiAgentService(store, createPiSandboxProvider(), runStore, resourceRegistry, mcpRegistry);
-    const workspaceService = new PiWorkspaceService({
-      store: database ? new PostgresPiWorkspaceStore(database) : new InMemoryPiWorkspaceStore(),
-      provider: createPiWorkspaceProvider(),
-      credentialBroker: createPiGitCredentialBroker(),
-      objectStorage: createPiObjectStorageGateway(),
-      sessionStore: store,
-    });
-    runtime.__nexusPiWorkspaceService = workspaceService;
-    const changeEvidence: PiChangeDeliveryEvidenceReader = {
-      getRepository: workspaceService.getRepository.bind(workspaceService),
-      getWorkspace: workspaceService.getWorkspace.bind(workspaceService),
-      deliveryDiff: workspaceService.deliveryDiff.bind(workspaceService),
-      checkpoints: workspaceService.checkpoints.bind(workspaceService),
-      listArtifacts: workspaceService.listArtifacts.bind(workspaceService),
-    };
-    const changeStore = database ? new PostgresPiChangeDeliveryStore(database) : new InMemoryPiChangeDeliveryStore();
-    const changeObjectVersions = new PiChangeDeliveryApprovalObjectVersionReader(changeStore, changeEvidence);
-    runtime.__nexusPiApprovalService = new PiApprovalService(approvalStore, approvalPolicy, approvalEvents, changeObjectVersions);
-    const gateways = createPiChangeDeliveryGateways();
-    runtime.__nexusPiChangeDeliveryService = new PiChangeDeliveryService(changeStore, changeEvidence, runtime.__nexusPiApprovalService, gateways.pullRequests, gateways.releases);
-    runtime.__nexusPiAgentRuntimeVersion = 16;
-  }
-  return runtime.__nexusPiAgentService;
+const runtimeGeneration = Symbol("pi-agent");
+
+function buildPiAgentRuntime(): PiAgentRuntimeBundle {
+  const database = process.env.DATABASE_URL ? createPostgresDatabase(process.env.DATABASE_URL) : undefined;
+  const store = database ? new PostgresPiSessionStore(database) : new InMemoryPiSessionStore();
+  const runStore = database ? new PostgresPiRunStore(database) : new InMemoryPiRunStore();
+  const resourceRegistry = createPiResourceRegistry(database ? new PostgresPiResourceRegistryStore(database) : new InMemoryPiResourceRegistryStore());
+  const mcpRegistry = createMcpRegistry(database ? new PostgresMcpRegistryStore(database) : new InMemoryMcpRegistryStore());
+  const approvalStore = database ? new PostgresPiApprovalStore(database) : new InMemoryPiApprovalStore();
+  const approvalEvents = database ? new PostgresPiApprovalEventSink(database) : new InMemoryPiApprovalEventSink();
+  const approvalPolicy = new ApprovalPolicyResolver(new FailClosedPiApprovalApproverDirectory(), { policyVersion: 1 });
+  const treeStore = database ? new PostgresPiSessionTreeStore(database) : new InMemoryPiSessionTreeStore();
+  const profileRegistry = database ? new PostgresAgentProfileRegistry(database) : new StaticAgentProfileRegistry();
+  const delegationStore = database ? new PostgresPiDelegationStore(database) : new InMemoryPiDelegationStore();
+  const m30Store = database ? new PostgresPiM30Store(database) : undefined;
+  const m31Store = database ? new PostgresPiSecurityResilienceStore(database) : new InMemoryPiSecurityResilienceStore();
+  const securityResilience = new PiSecurityResilienceService(m31Store);
+  const m32Store = database ? new PostgresPiPreproductionStore(database) : new InMemoryPiPreproductionStore();
+  const m33Store = database ? new PostgresPiPilotStore(database) : new InMemoryPiPilotStore();
+  const m34Store = database ? new PostgresPiReleaseGovernanceStore(database) : new InMemoryPiReleaseGovernanceStore();
+  const sessionTree = new SessionTreeService({ sessionStore: store, treeStore });
+  const delegation = new DelegationService(store, delegationStore, profileRegistry, undefined, false);
+  const modelGateway = new EnterpriseModelGateway({ store: m30Store ?? new InMemoryPiModelRouteStore(), safety: securityResilience });
+  const telemetry = new PiTelemetryService(m30Store ?? new InMemoryPiObservabilityStore());
+  const quota = new PiQuotaService(m30Store ?? new InMemoryPiQuotaStore());
+  const preproductionProbe = database
+    ? new CompositePiPreproductionProbe([new FailClosedPiPreproductionProbe(), new McpAuditScopePreproductionProbe(new PostgresMcpAuditScopeReadinessStore(database))])
+    : new FailClosedPiPreproductionProbe();
+  const preproduction = new PiPreproductionService(m32Store, preproductionProbe);
+  const pilot = new PiPilotService(m33Store);
+  const releaseGovernance = new PiReleaseGovernanceService(m34Store);
+  const agent = new PiAgentService(store, createPiSandboxProvider(), runStore, resourceRegistry, mcpRegistry);
+  const workspace = new PiWorkspaceService({
+    store: database ? new PostgresPiWorkspaceStore(database) : new InMemoryPiWorkspaceStore(),
+    provider: createPiWorkspaceProvider(),
+    credentialBroker: createPiGitCredentialBroker(),
+    objectStorage: createPiObjectStorageGateway(),
+    sessionStore: store,
+  });
+  const changeEvidence: PiChangeDeliveryEvidenceReader = {
+    getRepository: workspace.getRepository.bind(workspace),
+    getWorkspace: workspace.getWorkspace.bind(workspace),
+    deliveryDiff: workspace.deliveryDiff.bind(workspace),
+    checkpoints: workspace.checkpoints.bind(workspace),
+    listArtifacts: workspace.listArtifacts.bind(workspace),
+  };
+  const changeStore = database ? new PostgresPiChangeDeliveryStore(database) : new InMemoryPiChangeDeliveryStore();
+  const changeObjectVersions = new PiChangeDeliveryApprovalObjectVersionReader(changeStore, changeEvidence);
+  const approval = new PiApprovalService(approvalStore, approvalPolicy, approvalEvents, changeObjectVersions);
+  const gateways = createPiChangeDeliveryGateways();
+  const changeDelivery = new PiChangeDeliveryService(changeStore, changeEvidence, approval, gateways.pullRequests, gateways.releases);
+  return {
+    agent, workspace, resourceRegistry, mcpRegistry, approval, sessionTree, delegation, profileRegistry,
+    modelGateway, telemetry, quota, securityResilience, preproduction, pilot, releaseGovernance, changeDelivery,
+  };
 }
 
-export function getPiMcpRegistry(): McpRegistryService {
-  getPiAgentService();
-  if (!runtime.__nexusPiMcpRegistry) throw new Error("PI_MCP_REGISTRY_NOT_READY");
-  return runtime.__nexusPiMcpRegistry;
+export function getPiAgentRuntime(): PiAgentRuntimeBundle {
+  return moduleRuntime("pi-agent", runtimeGeneration, buildPiAgentRuntime);
 }
 
-export function getPiResourceRegistry(): PiResourceRegistryService {
-  getPiAgentService();
-  if (!runtime.__nexusPiResourceRegistry) throw new Error("PI_RESOURCE_REGISTRY_NOT_READY");
-  return runtime.__nexusPiResourceRegistry;
-}
-
-export function getPiApprovalService(): PiApprovalService {
-  getPiAgentService();
-  if (!runtime.__nexusPiApprovalService) throw new Error("PI_APPROVAL_RUNTIME_NOT_READY");
-  return runtime.__nexusPiApprovalService;
-}
-
-export function getPiWorkspaceService(): PiWorkspaceService {
-  getPiAgentService();
-  if (!runtime.__nexusPiWorkspaceService) throw new Error("PI_WORKSPACE_RUNTIME_NOT_READY");
-  return runtime.__nexusPiWorkspaceService;
-}
-
-export function getPiSessionTreeService(): SessionTreeService {
-  getPiAgentService();
-  if (!runtime.__nexusPiSessionTreeService) throw new Error("PI_SESSION_TREE_RUNTIME_NOT_READY");
-  return runtime.__nexusPiSessionTreeService;
-}
-
-export function getPiDelegationService(): DelegationService {
-  getPiAgentService();
-  if (!runtime.__nexusPiDelegationService) throw new Error("PI_DELEGATION_RUNTIME_NOT_READY");
-  return runtime.__nexusPiDelegationService;
-}
-
-export function getPiProfileRegistry(): StaticAgentProfileRegistry | PostgresAgentProfileRegistry {
-  getPiAgentService();
-  if (!runtime.__nexusPiProfileRegistry) throw new Error("PI_PROFILE_REGISTRY_NOT_READY");
-  return runtime.__nexusPiProfileRegistry;
-}
-
-export function getPiModelGateway(): EnterpriseModelGateway {
-  getPiAgentService();
-  if (!runtime.__nexusPiModelGateway) throw new Error("PI_MODEL_GATEWAY_NOT_READY");
-  return runtime.__nexusPiModelGateway;
-}
-
-export function getPiTelemetryService(): PiTelemetryService {
-  getPiAgentService();
-  if (!runtime.__nexusPiTelemetryService) throw new Error("PI_TELEMETRY_NOT_READY");
-  return runtime.__nexusPiTelemetryService;
-}
-
-export function getPiQuotaService(): PiQuotaService {
-  getPiAgentService();
-  if (!runtime.__nexusPiQuotaService) throw new Error("PI_QUOTA_NOT_READY");
-  return runtime.__nexusPiQuotaService;
-}
-
-export function getPiSecurityResilienceService(): PiSecurityResilienceService {
-  getPiAgentService();
-  if (!runtime.__nexusPiSecurityResilienceService) throw new Error("PI_SECURITY_RESILIENCE_NOT_READY");
-  return runtime.__nexusPiSecurityResilienceService;
-}
-
-export function getPiPreproductionService(): PiPreproductionService {
-  getPiAgentService();
-  if (!runtime.__nexusPiPreproductionService) throw new Error("PI_PREPRODUCTION_RUNTIME_NOT_READY");
-  return runtime.__nexusPiPreproductionService;
-}
-
-export function getPiPilotService(): PiPilotService {
-  getPiAgentService();
-  if (!runtime.__nexusPiPilotService) throw new Error("PI_PILOT_RUNTIME_NOT_READY");
-  return runtime.__nexusPiPilotService;
-}
-
-export function getPiReleaseGovernanceService(): PiReleaseGovernanceService {
-  getPiAgentService();
-  if (!runtime.__nexusPiReleaseGovernanceService) throw new Error("PI_RELEASE_GOVERNANCE_RUNTIME_NOT_READY");
-  return runtime.__nexusPiReleaseGovernanceService;
-}
-
-export function getPiChangeDeliveryService(): PiChangeDeliveryService {
-  getPiAgentService();
-  if (!runtime.__nexusPiChangeDeliveryService) throw new Error("PI_CHANGE_DELIVERY_RUNTIME_NOT_READY");
-  return runtime.__nexusPiChangeDeliveryService;
-}
+export function getPiAgentService(): PiAgentService { return getPiAgentRuntime().agent; }
+export function getPiMcpRegistry(): McpRegistryService { return getPiAgentRuntime().mcpRegistry; }
+export function getPiResourceRegistry(): PiResourceRegistryService { return getPiAgentRuntime().resourceRegistry; }
+export function getPiApprovalService(): PiApprovalService { return getPiAgentRuntime().approval; }
+export function getPiWorkspaceService(): PiWorkspaceService { return getPiAgentRuntime().workspace; }
+export function getPiSessionTreeService(): SessionTreeService { return getPiAgentRuntime().sessionTree; }
+export function getPiDelegationService(): DelegationService { return getPiAgentRuntime().delegation; }
+export function getPiProfileRegistry(): StaticAgentProfileRegistry | PostgresAgentProfileRegistry { return getPiAgentRuntime().profileRegistry; }
+export function getPiModelGateway(): EnterpriseModelGateway { return getPiAgentRuntime().modelGateway; }
+export function getPiTelemetryService(): PiTelemetryService { return getPiAgentRuntime().telemetry; }
+export function getPiQuotaService(): PiQuotaService { return getPiAgentRuntime().quota; }
+export function getPiSecurityResilienceService(): PiSecurityResilienceService { return getPiAgentRuntime().securityResilience; }
+export function getPiPreproductionService(): PiPreproductionService { return getPiAgentRuntime().preproduction; }
+export function getPiPilotService(): PiPilotService { return getPiAgentRuntime().pilot; }
+export function getPiReleaseGovernanceService(): PiReleaseGovernanceService { return getPiAgentRuntime().releaseGovernance; }
+export function getPiChangeDeliveryService(): PiChangeDeliveryService { return getPiAgentRuntime().changeDelivery; }

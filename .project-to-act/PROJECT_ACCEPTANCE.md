@@ -2,6 +2,8 @@
 
 ## 当前验收结论
 
+- E-105 员工画像（本地工程范围）：新增 F-088，从 task-command board 的 `requiredSkills` 派生员工技能画像，汇总在手/进行中/临期/容量点/参与项目，列出当前任务，并基于技能重合与开放任务生成“任务匹配建议”，一键触发 Agent 分派提案（onAsk）。验证方法：`npm run typecheck`（exit 0）、`npm run lint`（exit 0，0 errors/0 warnings）、真实 `/api/v1/task-command/board` 返回 `requiredSkills`、`/?view=employee-profile` 渲染成功。代码版本：本批未提交增量（提交 SHA 见 PR）。结论：通过（本地工程范围）。遗留：演示数据暂无未分派开放任务，建议区为空态；分派仍走 Agent 提案未接确认写入；真实企业 Gate 不变。
+- E-104 人员 × 项目多视图与离线连接恢复（本地工程范围）：新增 F-087，人员 × 项目模块以矩阵/项目泳道/人员泳道三种视图实时展示人员—项目关系与进度，人员池/矩阵行头拖拽到项目生成 Agent 提案（onAsk），不直接落库；模型网关对瞬时网络故障重试并归一为 MODEL_* 可降级错误，编排器不再把离线 fetch failed 记为 500 硬错误；新增 seed 脚本将演示项目/目标/里程碑/任务/风险写入 PostgreSQL 并把已有 mission 关联到项目。验证方法：`npm run typecheck`（exit 0）、`npm run lint`（exit 0，0 errors/0 warnings）、`npx vitest run tests/unit/model-gateway-retry.test.ts tests/unit/agent-orchestrator.test.ts tests/unit/fake-model.test.ts`（14/14 passed）、真实 PostgreSQL 冒烟（board 返回带 projectId 的 missions、bootstrap 返回项目）。代码版本：HEAD `407097e`（本批为未提交增量，提交 SHA 见 PR）。结论：通过（本地工程范围）。遗留：拖拽仅生成提案未接确认写入；firecracker 沙箱 Windows EPERM 为预存环境问题；真实企业 Gate 不变。
 - E-102 公开仓库交付验收：提交 `da7dbf3` 已推送到 `https://github.com/redmaplewww/nexus-office-agent` 的 `main`；远端最新提交与本地一致，公开树包含完整 `.project-to-act`。提交范围包含当前 Agent 开发模块、对话记忆修复、测试和文档；`test-artifacts/` 本地生成物保持未跟踪且未公开。提交前 `git diff --cached --check`、敏感模式检查、`project-to-act --check/--validate` 均通过；该证据只证明源码公开交付，不证明生产环境、真实企业渠道或未通过的 G-027～G-038。
 - E-101 AgentOps 推荐增量验收：M35 测试阶段已新增 `agentops-awesome-list`，服务端快照、工作台与说明文档统一呈现；文案明确其只读健康检查边界，不修改项目、不授予权限、不替代 `aawo-agent-tester` 功能测试或 G-039 交付门禁。该增量不扩张既有本地工程验收范围。
 - E-100 Agent 开发模块验收：本地领域/API/InMemory/PostgreSQL/RLS/审计/权限/幂等/CAS/失败关闭与交付清单已实现；五文档留档、主要版本 Diff/功能、失败测试不放行、逐版本通过测试和最终交付冻结均由服务端重验。全量 123 files/451 passed、8 files/26 skipped，typecheck、零警告 Lint、Next 生产构建、宽屏和 390×844 浏览器旅程通过；浏览器日志无错误/警告，移动端无横向溢出且弹窗完整可操作。G-039 仅在本地工程范围通过，真实 IdP、生产角色授权、生产 PostgreSQL、备份恢复与企业运行仍需外部验收。
@@ -28,7 +30,7 @@
 - E-084 环境结论：G-027/G-028 前置核验只得到 no-go 证据。`npm.cmd run pi-sandbox:preflight` 按预期退出 1，报告 `platform-linux`、provider 配置、`/dev/kvm`、`/dev/vhost-vsock`、cgroup v2/controllers、rootfs、kernel、HTTPS Supervisor endpoint 和 Run Token secret 不满足；Docker 29.6.1/Compose v5.2.0 可用，但未发现 Firecracker/Kata/Forgejo/MinIO/psql 工具路径。该结果不允许宿主机或普通容器降级，execute Profile、Shell/Git 写入和 G-027/G-028 继续关闭。
 - E-085 补充结论：修复 Runner 错误路径在 `finally` 中吞掉 Workspace/Sandbox 清理异常的问题；现在运行时失败、取消或资源阶段异常后，清理会在错误终态处理前执行，清理不确定统一进入 `unknown`，不再进入自动重试或错误成功声明。新增回归覆盖 runtime failure + cleanup failure，聚焦 4 项、相邻 Runner 控制 25 项、全量 111 个测试文件/402 项通过、8 个文件/26 个测试跳过，typecheck、Lint、Pi Runner bundle 通过；仍仅为 local/virtual/cooperative 证据，不改变 G-026/G-027/G-028 no-go。
 - E-086 补充结论：新增服务端来源的 `PiValidationPlan`、`PiWorkspaceValidationService` 和 Runner validation wiring；验证命令只能来自 approved Profile/tenant policy，命令摘要进入事件，输出按分类进入当前 Workspace 的 `test_report`/`scan_report` Artifact。已知非零退出按 `failed/dead_lettered` 处理，执行器不可用按 `unknown` 处理且不自动重试；聚焦 7 项、全量 111 个测试文件/405 项通过、8 个文件/26 个测试跳过，typecheck、Lint、Pi Runner bundle 通过。仍仅是 local/virtual/cooperative 证据，真实微 VM、Forgejo/S3、SAST/SCA、URL 过期/越权和 G-028 未通过，validation/execute consumer 继续关闭。
-- 最后检查：2026-08-26
+- 最后检查：2026-08-28
 
 ## 验收标准
 
@@ -375,3 +377,11 @@
 - 2026-08-05：M1 平台地基 Gate 通过；项目进入 M2。M1 证据不能用于声称完整业务或真实三平台集成完成。
 - 2026-08-05：M0 设计基线通过，项目进入 M1；完整项目仍未完成，三平台真实验收依赖后续测试企业授权。
 - 2026-08-05：0.1.0 原型验收通过，但其证据不能用于证明生产领域能力。
+
+
+- 2026-08-27：任务进度落地第一批验收（本地工程范围），证据 E-064。检查范围：F-077 发布必填门禁与工期字段（422/201 冒烟 + 专项测试）、F-078 时间线（GET timeline 200 + 专项测试）、F-079 临期/逾期 dueState（专项测试）、F-080 AI 只读事实卡工具（专项测试）。结论：通过（本地工程）。遗留：真实 PostgreSQL、后台到期提醒、看板/报表/交接单仍待开发或外部环境；6 项 firecracker 沙箱测试失败为 Windows 沙箱 C:\ 根目录写权限 EPERM，与本批无关且为预存问题。
+
+
+- 2026-08-27：第二批验收（本地工程范围），证据 E-065。检查范围：F-081 结构化交接单（专项测试断言字段落库并在签收后保留；前端交接链展示）、F-082 看板（board 接口返回可见任务+dueState+actorId 且排除模板；模块页按状态分列+逾期高亮+过滤）。结论：通过（本地工程）。遗留：真实 PostgreSQL、后台到期提醒、F-083～F-086 待后续；firecracker 沙箱 4 项测试失败为 Windows C:\ 写权限 EPERM（预存环境问题，与本批无关）。
+
+- 2026-08-27：第三批验收（本地工程范围），证据 E-103。检查范围：F-083 周期摘要（service.generatePeriodicSummary + scripts/task-summary.ts，日报/周报草稿按期间幂等发布）、F-084 成员负载（Postgres/InMemory listPeople 负载统计 + memberWorkload + 只读工具 work.get_member_workload + 定向分派负载过高 warnings + 看板成员负载条）、F-085 阻塞升级（collectTaskReminderCandidates 纯函数 + 扫描升级消息，阻塞任务走升级通道避免重复提醒）、F-086 报表导出（exportReport + GET /api/v1/task-command/reports/export CSV/JSON + 看板导出按钮）、后台到期提醒（runReminderScan 临期≤72h/逾期 + 确定性 UUID 幂等去重）。结论：通过（本地工程，真实 PostgreSQL）。验证：typecheck 0 错误、相关单测 28/28、真实库冒烟（负载字段正确、提醒 created=3→再扫 dedup=3→拨快5天 overdue=3、公司池 7 条提醒/摘要、CSV/JSON 导出正确）。遗留：postgres 集成测试 PGlite/WASM 在 Node24 环境 worker 崩溃为既有环境问题（git HEAD 同崩，与本批无关）；blocked 升级未在真实库造 24h 旧数据，用纯函数单测覆盖。

@@ -19,14 +19,16 @@ import { registerOfficeReadTools } from "@/src/modules/agent/application/office-
 import { getEnterpriseGovernanceService } from "@/src/modules/enterprise-governance/runtime";
 import { getEnterpriseIntelligenceService } from "@/src/modules/enterprise-intelligence/runtime";
 import { getGovernanceRuntime } from "@/src/modules/governance-workspace/runtime";
+import { moduleRuntime } from "@/src/platform/runtime/module-runtime";
 
-const runtime = globalThis as typeof globalThis & {
-  __nexusAgentRuntimeVersion?: number;
-  __nexusAgentStore?: AgentStore;
-  __nexusAgentOrchestrator?: AgentOrchestrator;
-  __nexusAgentTools?: ToolRegistry;
-  __nexusAgentSkills?: SkillRegistry;
+type AgentRuntimeBundle = {
+  orchestrator: AgentOrchestrator;
+  tools: ToolRegistry;
+  skills: SkillRegistry;
+  store: AgentStore;
 };
+
+const runtimeGeneration = Symbol("agent");
 
 export function createRuntimeModelGateway(): ModelGateway {
   if (process.env.NEXUS_MODEL_MODE === "disabled") return new UnavailableModelGateway();
@@ -38,43 +40,45 @@ export function createRuntimeModelGateway(): ModelGateway {
     : new UnavailableModelGateway();
 }
 
+function buildAgentRuntime(): AgentRuntimeBundle {
+  const management = getManagementLoopService();
+  const taskCommand = getTaskCommandService();
+  const memory = getAgentMemoryService();
+  const tools = new ToolRegistry();
+  registerManagementTools(tools, management);
+  registerAgentMemoryTools(tools, memory);
+  const governanceWorkspace = getGovernanceRuntime();
+  registerOfficeReadTools(tools, {
+    governance: getEnterpriseGovernanceService(), intelligence: getEnterpriseIntelligenceService(),
+    knowledge: governanceWorkspace.knowledge, meetings: governanceWorkspace.meetings, workflow: governanceWorkspace.workflow,
+  });
+  registerTaskCommandTools(tools, taskCommand);
+  registerWecomAccessControlTools(tools, getWecomAccessControlService());
+  registerWecomApplicationMessageTools(tools, getWecomApplicationMessageService());
+  const skills = createDefaultSkillRegistry();
+  const store = process.env.DATABASE_URL
+    ? new PostgresAgentStore(createPostgresDatabase(process.env.DATABASE_URL))
+    : new InMemoryAgentStore();
+  const orchestrator = new AgentOrchestrator(
+    store,
+    new ManagementContextProvider(management, taskCommand, memory),
+    createRuntimeModelGateway(),
+    tools,
+    skills,
+    taskCommand,
+    memory,
+  );
+  return { orchestrator, tools, skills, store };
+}
+
+export function getAgentRuntime(): AgentRuntimeBundle {
+  return moduleRuntime("agent", runtimeGeneration, buildAgentRuntime);
+}
+
 export function getAgentOrchestrator(): AgentOrchestrator {
-  if (runtime.__nexusAgentRuntimeVersion !== 9) {
-    const management = getManagementLoopService();
-    const taskCommand = getTaskCommandService();
-    const memory = getAgentMemoryService();
-    const tools = new ToolRegistry();
-    registerManagementTools(tools, management);
-    registerAgentMemoryTools(tools, memory);
-    const governanceWorkspace = getGovernanceRuntime();
-    registerOfficeReadTools(tools, {
-      governance: getEnterpriseGovernanceService(), intelligence: getEnterpriseIntelligenceService(),
-      knowledge: governanceWorkspace.knowledge, meetings: governanceWorkspace.meetings, workflow: governanceWorkspace.workflow,
-    });
-    registerTaskCommandTools(tools, taskCommand);
-    registerWecomAccessControlTools(tools, getWecomAccessControlService());
-    registerWecomApplicationMessageTools(tools, getWecomApplicationMessageService());
-    const skills = createDefaultSkillRegistry();
-    runtime.__nexusAgentStore = process.env.DATABASE_URL
-      ? new PostgresAgentStore(createPostgresDatabase(process.env.DATABASE_URL))
-      : new InMemoryAgentStore();
-    runtime.__nexusAgentTools = tools;
-    runtime.__nexusAgentSkills = skills;
-    runtime.__nexusAgentOrchestrator = new AgentOrchestrator(
-      runtime.__nexusAgentStore,
-      new ManagementContextProvider(management, taskCommand, memory),
-      createRuntimeModelGateway(),
-      tools,
-      skills,
-      taskCommand,
-      memory,
-    );
-    runtime.__nexusAgentRuntimeVersion = 9;
-  }
-  return runtime.__nexusAgentOrchestrator!;
+  return getAgentRuntime().orchestrator;
 }
 
 export function getAgentToolRegistry(): ToolRegistry {
-  getAgentOrchestrator();
-  return runtime.__nexusAgentTools!;
+  return getAgentRuntime().tools;
 }

@@ -2,14 +2,13 @@ import { AgentDevelopmentService } from "@/src/modules/agent-development/applica
 import { InMemoryAgentDevelopmentStore } from "@/src/modules/agent-development/infrastructure/in-memory-store";
 import { PostgresAgentDevelopmentStore } from "@/src/modules/agent-development/infrastructure/postgres-store";
 import { createPostgresDatabase } from "@/src/platform/database/postgres";
+import { moduleRuntime } from "@/src/platform/runtime/module-runtime";
 
-const runtime = globalThis as typeof globalThis & { __nexusAgentDevelopmentService?: AgentDevelopmentService; __nexusAgentDevelopmentRuntimeVersion?: number };
+const runtimeGeneration = Symbol("agent-development");
 
 export function getAgentDevelopmentService(): AgentDevelopmentService {
-  if (runtime.__nexusAgentDevelopmentRuntimeVersion !== 1 || !runtime.__nexusAgentDevelopmentService) {
+  return moduleRuntime("agent-development", runtimeGeneration, () => {
     const database = process.env.DATABASE_URL ? createPostgresDatabase(process.env.DATABASE_URL) : undefined;
-    runtime.__nexusAgentDevelopmentService = new AgentDevelopmentService(database ? new PostgresAgentDevelopmentStore(database) : new InMemoryAgentDevelopmentStore());
-    runtime.__nexusAgentDevelopmentRuntimeVersion = 1;
-  }
-  return runtime.__nexusAgentDevelopmentService;
+    return new AgentDevelopmentService(database ? new PostgresAgentDevelopmentStore(database) : new InMemoryAgentDevelopmentStore());
+  });
 }

@@ -31,10 +31,10 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
     { id: DEMO_OPERATIONS_ORG_ID, name: "运营中心" },
   ];
   private readonly people: WorkPerson[] = [
-    { id: DEMO_MANAGER_ID, displayName: "开发管理员", orgUnitId: DEMO_MANAGEMENT_ORG_ID, orgName: "经营管理", positionName: "企业负责人", activeTaskCount: 0 },
-    { id: DEMO_DELIVERY_OWNER_ID, displayName: "周然", orgUnitId: DEMO_DELIVERY_ORG_ID, orgName: "交付中心", positionName: "交付负责人", activeTaskCount: 0 },
-    { id: DEMO_PRODUCT_OWNER_ID, displayName: "林悦", orgUnitId: DEMO_PRODUCT_ORG_ID, orgName: "产品中心", positionName: "产品负责人", activeTaskCount: 0 },
-    { id: DEMO_OPERATIONS_OWNER_ID, displayName: "陈屿", orgUnitId: DEMO_OPERATIONS_ORG_ID, orgName: "运营中心", positionName: "运营负责人", activeTaskCount: 0 },
+    { id: DEMO_MANAGER_ID, displayName: "开发管理员", orgUnitId: DEMO_MANAGEMENT_ORG_ID, orgName: "经营管理", positionName: "企业负责人", activeTaskCount: 0, inProgressTaskCount: 0, dueSoonTaskCount: 0, capacityPoints: 0 },
+    { id: DEMO_DELIVERY_OWNER_ID, displayName: "周然", orgUnitId: DEMO_DELIVERY_ORG_ID, orgName: "交付中心", positionName: "交付负责人", activeTaskCount: 0, inProgressTaskCount: 0, dueSoonTaskCount: 0, capacityPoints: 0 },
+    { id: DEMO_PRODUCT_OWNER_ID, displayName: "林悦", orgUnitId: DEMO_PRODUCT_ORG_ID, orgName: "产品中心", positionName: "产品负责人", activeTaskCount: 0, inProgressTaskCount: 0, dueSoonTaskCount: 0, capacityPoints: 0 },
+    { id: DEMO_OPERATIONS_OWNER_ID, displayName: "陈屿", orgUnitId: DEMO_OPERATIONS_ORG_ID, orgName: "运营中心", positionName: "运营负责人", activeTaskCount: 0, inProgressTaskCount: 0, dueSoonTaskCount: 0, capacityPoints: 0 },
   ];
 
   async getOrCreatePrimaryConversation(tenantId: string, ownerId: string) {
@@ -58,7 +58,18 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
 
   async listPeople(tenantId: string) {
     if (tenantId !== DEMO_TENANT_ID) return [];
-    return structuredClone(this.people.map((person) => ({ ...person, activeTaskCount: this.packages.filter((item) => item.tenantId === tenantId && item.assigneeId === person.id && !["completed", "cancelled"].includes(item.status)).length })));
+    return structuredClone(this.people.map((person) => {
+      const tasks = this.packages.filter((item) => item.tenantId === tenantId && item.assigneeId === person.id);
+      const active = tasks.filter((item) => !["completed", "cancelled"].includes(item.status));
+      const now = Date.now();
+      return {
+        ...person,
+        activeTaskCount: active.length,
+        inProgressTaskCount: tasks.filter((item) => ["assigned", "claimed", "in_progress"].includes(item.status)).length,
+        dueSoonTaskCount: active.filter((item) => Date.parse(item.dueAt) <= now + 7 * 24 * 60 * 60 * 1000).length,
+        capacityPoints: active.reduce((sum, item) => sum + item.capacityPoints, 0),
+      };
+    }));
   }
 
   async listOrgUnits(tenantId: string) { return tenantId === DEMO_TENANT_ID ? structuredClone(this.orgUnits) : []; }
@@ -97,6 +108,10 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
   async listEvents(tenantId: string, actorId: string, after: number, limit: number) {
     void actorId;
     return structuredClone(this.events.filter((item) => item.tenantId === tenantId && item.sequence > after).slice(0, limit));
+  }
+
+  async listPackageEvents(tenantId: string, packageId: string) {
+    return structuredClone(this.events.filter((item) => item.tenantId === tenantId && item.packageId === packageId));
   }
 
   async listHandoffs(tenantId: string, packageIds: string[]) {
@@ -173,7 +188,9 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
   }
 
   async publishPoolMessage(message: WorkPoolMessage, event: Omit<WorkMessageEvent, "sequence">) {
-    const existing = message.sourceRunId ? this.poolMessages.find((item) => item.tenantId === message.tenantId && item.sourceRunId === message.sourceRunId) : undefined;
+    const existing = message.sourceRunId
+      ? this.poolMessages.find((item) => item.tenantId === message.tenantId && item.sourceRunId === message.sourceRunId)
+      : this.poolMessages.find((item) => item.tenantId === message.tenantId && item.id === message.id);
     if (existing) return { message: structuredClone(existing), created: false };
     this.poolMessages.push(structuredClone(message));
     this.messageEvents.push({ ...structuredClone(event), sequence: ++this.messageSequence });

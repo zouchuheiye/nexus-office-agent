@@ -224,3 +224,94 @@
 - 2026-08-05：完成 M1 平台地基；`0.2.0-foundation` 包含模块化领域结构、PostgreSQL Schema/RLS、权限策略、审计脱敏、Outbox/Inbox、Fake Model/Connector 和安全运行状态 API。19 项测试、类型、Lint、生产构建全部通过。证据 E-008。下一步进入 M2。
 - 2026-08-05：完成 M0 设计基线；11 个 Markdown 文档、1482 行、73 个定义需求，无空文档、重复定义和失效本地链接。飞书、钉钉、企业微信设计依据已按官方文档核对。证据 E-006、E-007。下一步进入 M1。
 - 2026-08-05：完成 0.1.0 可交互原型；保留为视觉概念验证，不视为生产领域实现。证据 E-001 至 E-005。
+
+- 2026-08-27：启动“任务进度落地”第一批（D-041 / F-077～F-080）。需求与方案已写入本台账：F-077 必填门禁+工期（新增 started_at/estimated_days）、F-078 时间线（复用 work_task_events）、F-079 临期/逾期（读时计算+分组）、F-080 AI 只读事实卡（只读工具）。本机仍为内存仓储（未接 PostgreSQL），持久化与后台提醒依赖后续数据库接入；代码改动不提交远端。证据待 E-064。
+
+
+- 2026-08-27：任务进度落地第一批（D-041 / F-077～F-080）本地工程完成，证据 E-064。typecheck 通过；新增与既有任务测试全绿（全量 452 通过 / 6 失败为 firecracker 沙箱环境 EPERM / 26 跳过）；API 冒烟：缺 startedAt/estimatedDays 发布返回 422，带字段发布 201，GET packages/:id/timeline 200。补建基线缺失的 artifacts 路由。剩余：真实 PostgreSQL 持久化、后台到期提醒 Worker、看板/报表/交接单（F-081～F-086 已规划）。
+
+
+- 2026-08-27：启动第二批（D-042 / F-081～F-082）。F-081 标准交接单：新增结构化字段与迁移；F-082 看板：board 只读接口 + 模块页。证据待 E-065。
+
+
+- 2026-08-27：第二批（D-042 / F-081～F-082）本地工程完成，证据 E-065。F-081 结构化交接单（当前进度/已完成/未完成/注意事项）+ 0046 迁移 + 前端展示；F-082 看板 board 接口 + 模块页 + 导航。修复 task-command runtime 版本守卫 4→5。剩余：真实 PostgreSQL 持久化、后台到期提醒、F-083～F-086 规划项。
+
+- 2026-08-27：本地持久化基础设施落地（证据 E-102）。安装 PostgreSQL 16.6 绿色便携版至 D:\pgsql16（无 Windows 服务，pg_ctl 管理）：补齐系统缺失的 VC++ 运行库 DLL、initdb 初始化（UTF8 / scram-sha-256 / 超级用户 postgres）、启动 127.0.0.1:5432、建库 nexus、在 .env.local 写入 DATABASE_URL（已 git 忽略，不提交）、全量 0001～0046 迁移应用、导入演示租户/部门/人员/职位种子数据；重启开发服务器后 task-command 已切换 PostgresTaskCommandRepository，API 发布任务可落库查询。旧内存演示任务随重启清空属预期。启动/停止脚本：D:\pgsql16\start-postgres.ps1 / stop-postgres.ps1。剩余：后台到期提醒、F-083～F-086。
+
+- 2026-08-27：持久化验证通过（补充 E-102）。重启开发服务器后：2 条聊天消息、1 个任务包均从 PostgreSQL 读回（workspace 的 availableTasks/publishedByMe、board 的 tasks 均可见）；人员/部门种子数据正常。稳定性修复：PostgreSQL 与开发服务器均改为 Start-Process 独立后台进程（不再挂靠 exec 会话，避免会话结束被带崩）；PostgreSQL 加入登录自启（Startup 目录 nexus-postgres.vbs）；脚本位于 D:\pgsql16\start-postgres.ps1 / stop-postgres.ps1 / start-dev.ps1。
+
+- 2026-08-27：启动第三批（D-043）：后台到期提醒 + F-083～F-086。需求与方案已写入台账（见 D-043）。本批依赖真实 PostgreSQL（已就绪，E-102）。证据待 E-103。
+
+- 2026-08-27：第三批（D-043 / F-083～F-086 + 后台到期提醒）本地工程完成，证据 E-103。实现：到期提醒+阻塞升级扫描（collectTaskReminderCandidates 纯函数 + service.runReminderScan + scripts/task-reminder.ts --once/--watch，消息用确定性 UUID 幂等去重，阻塞任务走升级通道避免重复提醒）；F-084 成员负载（WorkPerson 扩展 inProgressTaskCount/dueSoonTaskCount/capacityPoints，Postgres/InMemory listPeople 统计，定向分派负载过高返回 warnings，新增只读工具 work.get_member_workload，看板人员负载条）；F-086 报表导出（service.exportReport + GET /api/v1/task-command/reports/export CSV/JSON，看板导出按钮）；F-083 周期摘要（service.generatePeriodicSummary + scripts/task-summary.ts）。验证：typecheck 0 错误；新增单元测试 6/6 + 相关套件 28/28 通过；真实 Postgres 冒烟——负载字段正确、提醒扫描 created=3→再扫 dedup=3→拨快5天 overdue=3、公司池可见 7 条提醒/摘要、CSV 导出带表头、JSON 按人过滤正确。遗留：postgres 集成测试 PGlite/WASM 在当前 Node24 环境 worker 崩溃（既有环境问题，git HEAD 同样崩溃）；blocked 升级用纯函数单测覆盖。
+
+- 2026-08-28：完成“人员 × 项目多视图与拖拽分配提案”（F-087）和离线模型连接恢复修复，形成 E-104。人员 × 项目模块从空白占位重写为矩阵/项目泳道/人员泳道三种视图，复用 board 的 mission.projectId + assigneeId 展示实时关系与进度；人员池/矩阵行头拖拽到项目生成 Agent 提案（onAsk）。修复模型网关瞬时网络失败：重试 + 归一为 MODEL_* 可降级错误，编排器不再把离线 fetch failed 当成 500 硬错误。补齐演示数据：scripts/seed-development-data.sql/.ts 将演示目标/项目/里程碑/任务/风险写入 PostgreSQL，并把已有非模板 mission 关联到演示项目（package.json 增加 db:seed:development）。验证：typecheck 0 错误、lint 0 错误/0 警告、定向 vitest 14/14 通过、真实 PostgreSQL board/bootstrap 冒烟通过。遗留：拖拽仅生成提案未接确认写入；真实企业 Gate 不变。
+
+- 2026-08-28：新增“员工画像”（F-088），形成 E-105。新增左侧导航“员工画像”与独立模块页，从 board 的 requiredSkills 派生员工技能画像，汇总负载/容量/参与项目，列出当前任务，并基于技能重合与开放任务生成“任务匹配建议”，一键触发 Agent 生成分派提案。验证：typecheck 0 错误、lint 0 错误/0 警告、真实 board 返回 requiredSkills、页面渲染成功。遗留：演示数据暂无未分派开放任务（建议区为空态）；拖拽/分派仍走 Agent 提案未接确认写入；真实企业 Gate 不变。
+
+- 2026-08-31：零风险架构清理（E-106，见 docs/ARCHITECTURE_CLEANUP.md）。完成三项：新增 `components/board-client.ts` 统一三个视图（人员×项目、员工画像、任务进度）的 board 类型/取数/状态文案并接入 `useTaskBoard()`；`office-shell.tsx` 以 `viewRenderers` 查表替代嵌套三元路由；`api-response.ts` 改为有序 `errorRules` 表驱动错误映射。验证：typecheck 0 错误、lint 0 错误/0 警告、`tests/unit/api-response.test.ts` 通过、project-people/employee-profile/command/task-progress/today 五页渲染正常。行为不变，不改变任何 RLS/审计/权限语义。
+
+- 2026-08-31：新增“公告中心”（F-089），形成 E-107。消息池消息增加 `kind`（announcement/notice）：0047 迁移新增列与索引，领域 `WorkPoolMessage.kind`、`publishPoolMessageSchema.kind`、Postgres 仓储、Agent `communication.publish_message`（kind 参数）与日报/提醒（notice）全部打通；左侧导航新增“公告中心”页，公告/通知分栏展示，原公告可反馈，发布走 Agent 提案；右侧消息栏未改动。验证：typecheck/lint 0、三个相关单测 25/25 通过、workspace 返回 kind（1 公告 + 7 通知）、页面渲染成功。遗留：公告已读/置顶未做。
+
+- 2026-08-31：架构收敛四件套（E-108，见 docs/ARCHITECTURE_CLEANUP.md）。1) 新增 `components/workspace-client.ts`，工作对话与公告中心共用 `useWorkspace()`，消除 workspace 取数复制；2) 新增 `src/platform/runtime/module-runtime.ts`，12 个 runtime 全部改为模块代际单例（重编译即重建），删除手工版本号；3) 拆 board：新增 `GET /api/v1/task-command/people|packages|missions`，`board-client` 并行取细粒度接口，旧 board 保留兼容；4) 范围收敛：左侧导航默认只显示核心 5 项（对话/任务/审批/公告/人员×项目），其余折叠进“更多模块”；Agent 工具按意图注入（默认办公核心工具，企业微信仅在提及渠道时注入）。验证：typecheck/lint 0、相关单测 37/37 通过、新接口 people=4/packages=3/missions=2、四页渲染正常、Agent 实测 200 正常回答、board 兼容保留。遗留：双仓储切换（#4）与 Pi 部署边界（#7 后半）未做。
+
+- 2026-08-31：按用户要求撤销 E-108 中的“左侧导航更多模块折叠”，恢复完整导航（office-shell/globals.css 回退）；Agent 工具按意图注入保留。仅 UI 回退，无功能损失。
+
+- 2026-08-31：按用户要求移除“人员 × 项目”页的项目泳道/人员泳道视图，只保留矩阵并精修 UI（顶部概览条、项目列进度/成员数、人员行负载、格子悬停与拖拽高亮、统一间距），形成 E-109。验证：typecheck/lint 0、页面不再包含泳道与模式切换、概览条正常渲染。
+
+- 2026-09-01：按用户要求将“人员 × 项目”模块更名为“项目管理”（导航、页面标题、kicker、说明同步），定位明确为“任务与人员管理平台”；矩阵保持 项目列 × 成员行 × 任务格 的形态，形成 E-110。验证：typecheck/lint 0、页面标题与导航更新正常。
+
+- 2026-09-01：按用户要求移除“员工画像”（F-088）：删除导航、viewRenderers 注册、组件 `components/employee-profile.tsx` 与 `.ep-*` 样式，核心明确收敛为“项目管理”；工作对话仍保留任务/沟通能力，形成 E-111。验证：typecheck/lint 0、页面不再包含员工画像入口。
+
+- 2026-09-01：按用户要求将“公告中心”改为“我的任务”（F-090）：移除公告中心页面/导航/样式，新增个人任务页（只看分配给自己的任务，按状态分组，支持开始/解除阻塞/提交验收/完成/交接和“让 Agent 整理”）；消息池 `kind` 字段与右侧消息栏保留，形成 E-112。验证：typecheck/lint 0、导航与页面切换正常。
+
+- 2026-09-02：按用户要求移除“我的任务”（F-090）与“项目管理”（F-087）导航入口与页面组件，任务闭环收敛到工作对话任务侧栏（我的/可承接/已发布/待交接）与任务进度页；连同此前未提交产品改动与 runtime 清理一起提交（commit `ba64439`），形成 E-113。验证：typecheck 0。被移除组件可自 git 历史找回。
+
+- 2026-09-02：任务执行链路缺陷修复与本地授权补齐，形成 E-114。1) Worker 运行时上下文未接 taskCommand，导致含任务包的提案版本校验误报 `PROPOSAL_OBJECT_VERSION_CONFLICT`（`src/platform/workers/runtime.ts` 补齐 taskCommand）；2) 提案确认对无 projectId 的交接/签收类提案强制重建项目上下文而抛 `INTERNAL_ERROR`（`src/modules/agent/application/orchestrator.ts` 改为有 projectId 才做版本校验，与 Worker 语义一致）；3) 本地真实 PostgreSQL 补齐 RBAC 种子（enterprise_manager/employee 角色、权限映射与 user_roles），使 Worker 按数据库授权执行不再 `TOOL_PERMISSION_DENIED`。真实 PostgreSQL 端到端验证：direct 与 open_claim 发布→提案确认→Worker 执行 succeeded→成员承接→发起交接→签收 accepted 全链路通过，事件链 package_published/claimed/handoff_initiated/handoff_accepted 完整，typecheck 0。说明：本地演示需运行独立 Worker 进程并配置角色权限，否则会复现“确认后不执行 / 权限拒绝”；本机 tsx 因 `os.userInfo` ENOMEM 需以 NODE_OPTIONS 预加载补丁启动。
+
+- 2026-09-04：按用户要求放宽任务发布门禁（F-077 语义变更），形成 E-115。用户在对话里怎么写就怎么发：`publishMissionSchema` 的任务包必填字段降为仅 title，缺字段由 `service.publishMission` 归一化为“待补充”占位并记录 mission/package `missingFields`（默认 open_claim 公开承接、占位不参与提醒扫描）；Agent 系统提示与 `work.publish_task_bundle`/`work.create_task_template` 工具描述同步修改——用户要求发布/下发/等待承接时直接调用发布工具，不再要求先补全、不再转纯文字预览；任务卡对非模板同样展示“待补充”标签。验证：typecheck 0；真实 PostgreSQL 冒烟——按“AI 产品经理项目，工期这周末，大概需要 2-3 人”发布 201，package 状态 published/open_claim、出现在可承接池，missingFields 含验收标准/截止时间/优先级/工期/容量点等；Agent 原话触发 `work.publish_task_bundle` 生成待确认提案而非拒绝。遗留：任务补全/转正式入口（占位任务的后续编辑）待后续排期；真实企业 Gate 不变。
+
+- 2026-09-04：工作对话改为纯 Agent 路由（E-116）：移除输入框上方“任务/消息/审批/项目/会议/知识/经营”常用办公入口快捷键（不再手动选域、不再向输入框注入长段规则提示）；“发布任务/推送”按钮点击只填入极短意图词（“发布一项任务”/“推送一条沟通消息”），长分节模板不再注入输入框，域与工具选择完全交给 Agent 按自然语言意图路由。验证：typecheck 0、无残留引用。遗留：主系统提示瘦身与业务规则下沉为各域 Skill（意图路由强化）待后续排期；本地 Worker 需随代码更新重启。
+
+- 2026-09-04：任务管理全流程真实回归（E-117）：管理员按原话发布缺字段任务（open_claim、missingFields 记录）→ 陈屿承接 → 陈屿开始 → 陈屿提交验收 → 管理员验收完成，双角色按数据库授权执行，package 最终 completed（assignee 陈屿、version 5、evidence 落库、completed_at 有值），事件链 package_published→package_claimed→package_status_changed×3 完整；typecheck 0。顺带修复：`requiredSkills` 在直连 service 调用缺失时的容错（undefined 判空）与 schema 声明为可选默认空数组。遗留：占位任务补全/转正式入口与交接签收在完整链路上的再次验证待排期。
+
+- 2026-09-04：发布拦截五类门禁逐一实测（E-118）：1) 权限——无 `work_task:create` 拒绝、无 `work_task:assign` 但定向分派拒绝；2) 引用——负责人不存在、部门不存在、错误会话分别拒绝；3) 逻辑——开始晚于截止、截止在过去（DB `work_packages_check4`）、direct 带部门、open_claim 带负责人均拒绝；4) 安全——注入特征词被安全策略拒绝（不调模型），正常发布生成 R2 待确认提案而非直接生效；5) 漂移——测试发现漏洞并修复：发布提案若输入缺 `projectId`，确认/Worker 的版本漂移校验会整段跳过（模型漏填即漏检，实测漂移后仍可确认执行）。修复：`orchestrator.handleToolCall` 在生成提案时从运行 contextRefs 的项目引用补入 `projectId`（仅 publish_task_bundle），修复后漂移场景确认返回 `PROPOSAL_OBJECT_VERSION_CONFLICT`。验证：9 项服务级拦截全部按预期拒绝、注入 0.6s 拒绝、漂移修复前后对比明确；typecheck 0；测试脏数据与项目版本已还原。遗留：该修复需并入测试分支供对方验证。
+
+- 2026-09-04：修复"受限信息"自污染误拦（E-119）。根因：1) 记忆快照中的组织/对象 UUID（含摘要截断尾巴的残段）未被归一化，宽泛的"13-19 位连续数字"敏感规则把 ID 前缀误判为受限内容，导致整轮上下文包被判 restricted；2) 上下文构建先写入情景/上下文记忆、后计算分级，受限拒答因此自我复制并污染后续轮次；3) 受限拒答以普通 answer 类型写回，进一步进入记忆。修复：`data-classification.ts` 将连字符十六进制 ID（含被截断的尾段，8-hex + 1-4 个 1-12 hex 分段）整体归一化为 `[id]`；`context-provider.ts` 先计算 dataClassification，restricted 时跳过 captureSituation/captureContext；`orchestrator.ts` MODEL_POLICY_DENIED 拒答输出 kind 改为 refusal（不进入对话记忆捕获）。验证：清理污染记忆/会话后，按用户原话"门禁漂移验证2"发布不再受限，正常生成待确认提案；确认后 Worker 执行成功，任务已发布（open_claim published）；typecheck 0。遗留：Agent 检索"未找到"类回答未实际调用任务查询工具即下结论（8c53dcd0 实例）与摘要截断 UUID 的生成侧修复待排期；敏感规则命中定位日志待排期。
+
+- 2026-09-04：查找任务强制走任务事实源（E-120）。新增只读工具 `work.find_task` 与服务方法 `service.findTask`：按标题/描述/所属使命名称在当前用户可见任务范围（我的/可承接/已发布/模板/交接参与/待签收）搜索，返回任务 ID、状态、所在分类与版本；Agent 系统提示与工具描述规定"询问任务是否存在/在哪/按名称查找时，必须先调用 work.find_task，只有返回空才可回答未找到"，不得仅凭记忆或知识库检索下结论。验证：typecheck 0；按"我再哪里看门禁漂移验证2"实测，Agent 路由 tools 含 work.find_task 并正确返回任务 f4150c4c（published/可承接）与位置，不再出现"未找到"误答。遗留：模型网关偶发"暂时不可用"属外部瞬时故障，与本次路由无关。
+
+- 2026-09-04：核心三功能回归（发布/交接/追踪，E-121）：管理员按原话发布缺字段任务（open_claim、missingFields 记录）→ 陈屿承接并开始 → 陈屿发起交接给管理员 → 管理员签收 → 管理员提交验收并完成。package 7662c562 全程 version 1→6，最终 completed（证据 evidence://core-regression-accept、completed_at 有值）；时间线 7 条事件顺序完整：published→claimed→status_changed→handoff_initiated→handoff_accepted→status_changed×2，操作人分别为管理员/陈屿并正确切换；workspace 已发布可见且 status=completed、我的列表按规则排除 completed、board 任务 status=completed；typecheck 0。临时脚本已清理。真实企业 Gate 不变。
+
+- 2026-09-04：项目进度可查性验证（E-122）：1) 数据接口——`GET /api/v1/task-command/board` 返回 12 个任务并按状态分组（assigned×2/claimed×3/completed×2/in_progress×1/published×4，含逾期/临期标记）；`GET /api/v1/management/snapshot?projectId=30000000-0000-4000-8000-000000000001` 返回项目健康 at_risk、目标 88/95%、风险"接口联调晚于基线 2 天"(4x4)、里程碑"华东客户灰度验收:at_risk"、管理任务 in_progress/in_review/blocked 与行动项计数，字段完整可读。2) Agent 自然语言查询（"项目现在进度怎么样/列出未完成任务"）实际调用了 work.find_task / work.get_task_progress / office.read_governance_workspace / office.read_enterprise_intelligence 等查询工具，工具链执行成功；但收尾合成回答时模型网关第二轮请求不稳定，连续两次返回"工具已执行…可在任务栏核验"兜底，未产出可读汇总。遗留：Agent 多工具执行后若模型第二轮失败，应改为确定性的结构化摘要兜底（把已执行工具的结果拼成进度清单），避免返回无信息兜底话术。
+
+- 2026-09-04：工具执行后的确定性汇总兜底（E-123）。`orchestrator.ts` 记录每个已执行非提案工具的返回（executedResults），模型第二轮失败且已执行工具时，不再返回"工具已执行…可在任务栏核验"空话，而是由 `formatExecutedSummary` 把 work.find_task 等返回的 tasks 去重过滤（排除 completed/cancelled/模板）后直接拼成按状态分类的清单。验证：typecheck 0；复现原问题提问"列出智能客服 2.0 华东上线项目里尚未完成的任务"，模型第二轮仍失败但输出已变成可读清单（华东上线联调支持·已分派、华东监控告警值班·已承接、华东客服路由压测·已承接，含所在分类）；tools=work.find_task×4 + office.read_governance_workspace。说明：清单覆盖范围取决于模型实际发起的检索关键词；完整项目盘点应引导走任务进度看板/work.get_task_progress（遗留：为"项目全部未完成任务"提供无关键词的全量只读工具待排期）。
+
+- 2026-09-04：项目任务全量盘点只读工具（E-124）。新增 `work.project_task_inventory` 与 `service.projectTaskInventory`：按 projectId 一次返回当前用户可见的全部任务（含状态、所在分类、使命标题、dueState、模板/待补充标记、负责人），不依赖关键词；Agent 系统提示规定"列出某项目全部/未完成任务或盘点时优先一次调用本工具，不要用 find_task 多关键词猜测"。确定性兜底 `formatExecutedSummary` 对返回的 tasks 同样生效。验证：typecheck 0；原问题复测 Agent 路由含 work.project_task_inventory，输出项目 8 项未完成任务完整清单并按 可承接/已分派/已承接/进行中 归类（含截止、逾期、负责人、待补充字段与测试类任务提示）；模型本轮正常产出汇总。遗留：测试类脏任务（门禁漂移验证2×2 等）归属清晰性待后续核对/清理。
+
+- 2026-09-04：移除输入框上方可见小字"说说你要处理什么"（E-125）：删除 `<label>` 可见文本，改以 textarea `aria-label` 保留无障碍名称，placeholder 维持"输入一件要处理的事…"。验证：typecheck 0。
+
+- 2026-09-04：输入提示文案由"Ctrl / ⌘ + Enter 发送"改为"Ctrl + Enter 发送"（E-126）。验证：typecheck 0。
+
+- 2026-09-04：发送键位改为 Enter 发送 / Shift + Enter 换行（E-127）：`handleComposerKeyDown` 在非组合输入（isComposing）且非 Shift 时回车即 `requestSubmit`，Shift+Enter 保留默认换行；提示文案同步为"Enter 发送 · Shift + Enter 换行"。验证：typecheck 0。
+
+- 2026-09-04：移除输入区安全提示小字"只使用当前账号有权访问的数据和能力"（E-128），保留右侧发送键位提示。仅 UI 文案删除，鉴权逻辑不变。验证：typecheck 0。
+
+- 2026-09-04：清理重复任务（E-129）。Agent 核验确认两对重复（门禁漂移验证2：dd945937/f4150c4c；AI产品经理项目：04c7f2b3/c4f57d1c），但工具目录无删除能力且需模型调用状态工具。直接以管理员身份将多余份标记 cancelled（保留 f4150c4c、c4f57d1c），两对各剩一份 published 且保留审计链（cancelled v2）。说明：用户侧首次"取消"失败原因=模型网关返回"暂时不可用"导致工具未执行；模型网关对瞬时网络错误有最多 3 次退避重试，但对话 run 无自动重跑（需重发），Worker 作业才有租约重试/死信。遗留：任务卡无"取消/删除"直接操作按钮，需经 Agent 或 API；物理删除未提供（当前用 cancelled 保留可追溯）。
+
+- 2026-09-04：取消任务直接操作 + Agent 取消能力明确（E-130）。任务卡顶栏新增"取消"按钮（发布者/承接人视角、非模板、无待签收交接、状态 published/assigned/claimed/in_progress/blocked/in_review 可取消），点击 window.confirm 确认后经 transition 接口置 cancelled，保留审计；`work.update_my_task` 描述与 Agent 系统提示同步明确"取消/删除/清理重复任务=置 cancelled（无物理删除），重复先确认保留份"。验证：typecheck 0。说明：取消按钮与 Agent 两条路径共用同一状态机与服务校验。
+
+- 2026-09-04：取消按钮 UI 路径实测（E-131）：headless Edge 打开工作台定位"华东监控告警值班-公开承接测试"卡片 → 点击"取消"→ confirm 弹窗文案正确并接受 → 任务包 93979b1d 状态变为 cancelled（v3），截图 flow-shots/05-cancel-ui.png。验证完成。
+
+- 2026-09-04：Agent 取消任务强制人工确认（E-132）。新增 `work.cancel_task`（confirmationPolicy: always，只生成待人工确认的取消提案，确认后由 Worker 执行置 cancelled，保留审计）；`work.update_my_task` 移除取消用途（描述、JSON schema 与 zod refine 均拒绝 nextStatus=cancelled，防止绕过取消确认）；Agent 系统提示规定取消/删除/清理重复一律走 work.cancel_task。验证：typecheck 0。说明：部署/测试需重启 Worker 加载新工具。
+
+- 2026-09-04：Agent 取消确认提案实测（E-133）：重启 Worker（含 work.cancel_task）后让 Agent"取消任务 AI产品经理项目 c4f57d1c"，输出 kind=proposal / status=awaiting_confirmation，tools=work.cancel_task，提案预览"将取消任务包…取消后不可恢复并保留审计"，未直接执行；测试提案已清理，任务保留。验证完成。
+
+- 2026-09-04：移除"我的"任务卡上的"开始"按钮（E-134）：assigned/claimed 状态不再显示一键开始按钮，卡片底部改显示相对截止时间；状态推进仍可经 Agent 或后续动作完成。验证：typecheck 0。
+
+- 2026-09-04：待交接改为双向可见（E-135）：服务端 `workspace.pendingHandoffs` 从"仅待我签收（to=我）"扩展为"待我签收 + 我发起待对方签收"，每条带 `direction: incoming|outgoing`；任务侧栏"待交接"列出两类，卡片对 incoming 保持 签收/退回 按钮，对 outgoing 显示"等对方签收"标记（前端用两张映射分离，不干扰原签收逻辑）；find_task / project_task_inventory 分类标注相应调整为 待签收/待对方签收。验证：typecheck 0；workspace 返回 3 条 outgoing（华东客服路由压测、门禁漂移验证2、AI产品经理项目）。说明：出向交接暂无"撤回"动作，属后续项。
+
+- 2026-09-04：撤回我发起的待签收交接（E-136）。服务端新增域函数 `revokeTaskHandoff`（发起人可撤回，状态 rejected + responseNote"发起人撤回交接" + respondedBy=发起人，无接收人限制）、`service.revokeTaskHandoff` 与 `POST /handoffs/[id]/revoke`；Agent 工具 `work.revoke_task_handoff`（confirmationPolicy always，生成待确认撤回提案）；前端 outgoing 卡片增加"撤回交接"按钮（window.confirm），交接链对 rejected && respondedBy=fromAssigneeId 显示"已撤回"而非"已退回"。验证：typecheck 0；服务层与 HTTP 路由分别撤回 5aa4c588（门禁漂移验证2）与 4015e5d6（华东客服路由压测）成功，状态 rejected、respondedBy=发起人，pending outgoing 由 3 降至 1（保留 AI产品经理项目交接作演示）；409 版本不符时正确拒绝。说明：撤回不改变任务负责人（继续留在原负责人）。
+
+- 2026-09-04：待签收交接改为直接签收/退回（E-137）：incoming 卡片的"签收/退回"不再往输入框注入让 Agent 代劳的提示词，改为直接调用 `POST /handoffs/[id]/response`——签收走 window.confirm，退回用 window.prompt 要求至少 4 字原因；成功后刷新并提示。验证：typecheck 0；签收/退回均不再依赖模型网关。说明：Agent 侧仍可用 work.respond_to_task_handoff（带确认提案），两条路径并存。
+
+- 2026-09-04：交接中状态明示（E-138）：任务卡顶栏对存在未完成出向交接的任务显示"正在交接中 · 等待 XX 确认"（在"我的"也可见，不再只靠隐藏按钮让人困惑）；"待交接"标签内仍显示"等对方签收"。验证：typecheck 0。

@@ -11,6 +11,7 @@ import { WorkflowService } from "@/src/modules/workflow/application/service";
 import { getDevelopmentWorkflowRepository } from "@/src/modules/workflow/infrastructure/in-memory-repository";
 import { PostgresWorkflowRepository } from "@/src/modules/workflow/infrastructure/postgres-repository";
 import { createPostgresDatabase } from "@/src/platform/database/postgres";
+import { moduleRuntime } from "@/src/platform/runtime/module-runtime";
 
 type GovernanceRuntime = {
   workflow: WorkflowService;
@@ -18,31 +19,25 @@ type GovernanceRuntime = {
   meetings: MeetingService;
 };
 
-const globalRuntime = globalThis as typeof globalThis & { __nexusGovernanceRuntime?: GovernanceRuntime; __nexusGovernanceRuntimeVersion?: number };
+const runtimeGeneration = Symbol("governance-workspace");
 
 export function getGovernanceRuntime(): GovernanceRuntime {
-  if (globalRuntime.__nexusGovernanceRuntimeVersion !== 1) {
-    globalRuntime.__nexusGovernanceRuntime = undefined;
-    globalRuntime.__nexusGovernanceRuntimeVersion = 1;
-  }
-  if (!globalRuntime.__nexusGovernanceRuntime) {
+  return moduleRuntime("governance-workspace", runtimeGeneration, () => {
     if (process.env.DATABASE_URL) {
       const database = createPostgresDatabase(process.env.DATABASE_URL);
       const knowledge = new KnowledgeService(new PostgresKnowledgeRepository(database));
-      globalRuntime.__nexusGovernanceRuntime = {
+      return {
         workflow: new WorkflowService(new PostgresWorkflowRepository(database), new PostgresEventStore(database)),
         knowledge,
         meetings: new MeetingService(new PostgresMeetingRepository(database), getManagementLoopService(), knowledge, new PostgresEventStore(database)),
       };
-    } else {
-      const events = new InMemoryEventStore();
-      const knowledge = new KnowledgeService(getDevelopmentKnowledgeRepository());
-      globalRuntime.__nexusGovernanceRuntime = {
-        workflow: new WorkflowService(getDevelopmentWorkflowRepository(), events),
-        knowledge,
-        meetings: new MeetingService(getDevelopmentMeetingRepository(), getManagementLoopService(), knowledge, events),
-      };
     }
-  }
-  return globalRuntime.__nexusGovernanceRuntime;
+    const events = new InMemoryEventStore();
+    const knowledge = new KnowledgeService(getDevelopmentKnowledgeRepository());
+    return {
+      workflow: new WorkflowService(getDevelopmentWorkflowRepository(), events),
+      knowledge,
+      meetings: new MeetingService(getDevelopmentMeetingRepository(), getManagementLoopService(), knowledge, events),
+    };
+  });
 }
