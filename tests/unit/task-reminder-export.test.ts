@@ -1,4 +1,4 @@
-// Requirements: F-083, F-084, F-085, F-086, 后台到期提醒 (D-043)
+// Requirements: PR-009, PR-010, PR-012, MR-046, MR-047, MR-048, MR-049, MR-050, AR-011, SR-007, AC-012, AC-013
 import { describe, expect, it } from "vitest";
 import { TaskCommandService } from "@/src/modules/task-command/application/service";
 import { DEMO_DELIVERY_OWNER_ID, DEMO_PRODUCT_OWNER_ID, InMemoryTaskCommandRepository } from "@/src/modules/task-command/infrastructure/in-memory-repository";
