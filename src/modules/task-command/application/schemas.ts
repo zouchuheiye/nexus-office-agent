@@ -144,6 +144,9 @@ export type AppendPoolFeedbackInput = z.infer<typeof appendPoolFeedbackSchema>;
 export const exportReportSchema = z.object({
   groupBy: z.enum(["person", "project", "period"]).optional(),
   format: z.enum(["csv", "json"]).optional(),
+  scope: z.enum(["all", "mine", "published"]).optional(),
+  status: z.enum(["published", "assigned", "claimed", "in_progress", "blocked", "in_review", "completed", "cancelled"]).optional(),
+  overdueOnly: z.enum(["true", "false"]).optional(),
   assigneeId: z.uuid().optional(),
   missionId: z.uuid().optional(),
   from: isoDateTime.optional(),

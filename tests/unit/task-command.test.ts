@@ -64,6 +64,50 @@ describe("real-time task command domain", () => {
     expect(nextPage[0].sequence).toBeGreaterThan(firstPage[1].sequence);
   });
 
+  it("exposes the complete authorized global event history, including handoff-only tasks", async () => {
+    const { service, publisher, conversation } = await fixture();
+    const assigned = (await service.publishMission(publisher, {
+      ...missionInput(conversation.id),
+      packages: [{ ...missionInput(conversation.id).packages[1], title: "全局时间线交接任务", assigneeId: DEMO_DELIVERY_OWNER_ID }],
+    })).packages[0];
+    const delivery = { ...createDevelopmentRequestContext("timeline-delivery"), actorId: DEMO_DELIVERY_OWNER_ID };
+    const initiated = await service.initiateTaskHandoff(delivery, {
+      taskId: assigned.id, expectedVersion: assigned.version, toAssigneeId: DEMO_PRODUCT_OWNER_ID,
+      note: "交接时间线测试", currentProgress: "进行中", completedWork: "已完成", pendingWork: "待复核",
+    });
+    const recipient = { ...createDevelopmentRequestContext("timeline-recipient"), actorId: DEMO_PRODUCT_OWNER_ID };
+    await service.respondToTaskHandoff(recipient, initiated.handoff.id, { expectedVersion: assigned.version, decision: "accept" });
+    const events = await service.events(recipient, 0, 100);
+    expect(events.map(({ eventType }) => eventType)).toEqual(expect.arrayContaining([
+      "mission_published", "package_published", "package_handoff_initiated", "package_handoff_accepted",
+    ]));
+    expect(events.every((item, index) => index === 0 || item.sequence > events[index - 1].sequence)).toBe(true);
+    const first = await service.events(recipient, 0, 1);
+    expect((await service.events(recipient, first[0].sequence, 100)).every(({ sequence }) => sequence > first[0].sequence)).toBe(true);
+    const outsider = { ...createDevelopmentRequestContext("timeline-outsider"), actorId: DEMO_OPERATIONS_OWNER_ID, dataScopes: [{ type: "self" as const }] };
+    expect(await service.events(outsider, 0, 100)).toEqual([]);
+  });
+  it("keeps authorized events across repository pages when earlier events are filtered", async () => {
+    const { service, publisher, conversation } = await fixture();
+    for (let index = 0; index < 101; index += 1) {
+      await service.publishMission(publisher, {
+        ...missionInput(conversation.id),
+        title: `时间线分页-不可见-${index}`,
+        packages: [{ ...missionInput(conversation.id).packages[1], title: `不可见任务-${index}`, assigneeId: DEMO_OPERATIONS_OWNER_ID }],
+      });
+    }
+    const visible = await service.publishMission(publisher, {
+      ...missionInput(conversation.id),
+      title: "时间线分页-可见",
+      packages: [{ ...missionInput(conversation.id).packages[1], title: "可见任务", assigneeId: DEMO_PRODUCT_OWNER_ID }],
+    });
+    const recipient = { ...createDevelopmentRequestContext("timeline-page-recipient"), actorId: DEMO_PRODUCT_OWNER_ID };
+    const events = await service.events(recipient, 0, 2);
+    expect(events).toHaveLength(2);
+    expect(events.map(({ missionId }) => missionId)).toEqual([visible.mission.id, visible.mission.id]);
+    expect(events[0].sequence).toBeGreaterThan(200);
+  });
+
   it("creates incomplete work as a private editable template instead of blocking on missing fields", async () => {
     const { service, publisher, conversation } = await fixture();
     const created = await service.createTaskTemplate(publisher, { conversationId: conversation.id, title: "API 申请工作" });

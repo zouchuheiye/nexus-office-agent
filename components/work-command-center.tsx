@@ -75,6 +75,10 @@ export function WorkCommandCenter({
   const [railMode, setRailMode] = useState<"tasks" | "messages">("tasks");
   const [busyTask, setBusyTask] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [handoffTask, setHandoffTask] = useState<Task | null>(null);
+  const [handoffDraft, setHandoffDraft] = useState({ toAssigneeId: "", note: "", currentProgress: "", completedWork: "", pendingWork: "", attentionPoints: "" });
+  const [confirmAction, setConfirmAction] = useState<{ kind: "cancel" | "revoke" | "accept"; task?: Task; handoff?: TaskHandoff } | null>(null);
+  const [rejectHandoffDraft, setRejectHandoffDraft] = useState<{ handoff: TaskHandoff; version: number; responseNote: string } | null>(null);
   const hydrated = useRef(false);
   const conversationEnd = useRef<HTMLDivElement>(null);
   const didInitialJump = useRef(false);
@@ -202,42 +206,80 @@ export function WorkCommandCenter({
   }
 
   async function cancelTask(task: Task) {
-    if (!window.confirm(`确认取消任务「${task.title}」？取消后保留审计记录，任务不可恢复。`)) return;
-    await transition(task, "cancelled");
+    setConfirmAction({ kind: "cancel", task });
   }
 
   async function revokeHandoff(handoff: TaskHandoff, version: number) {
-    if (!window.confirm("确认撤回这条交接？对方将不能再签收，任务继续留在你名下。")) return;
+    setConfirmAction({ kind: "revoke", handoff });
+    void version;
+  }
+
+  async function acceptHandoff(handoff: TaskHandoff, version: number) {
+    setConfirmAction({ kind: "accept", handoff });
+    void version;
+  }
+
+  async function rejectHandoff(handoff: TaskHandoff, version: number) {
+    setRejectHandoffDraft({ handoff, version, responseNote: "" });
+  }
+
+  async function executeConfirmAction() {
+    const action = confirmAction;
+    if (!action) return;
+    setConfirmAction(null);
+    if (action.kind === "cancel" && action.task) await transition(action.task, "cancelled");
+    if (action.kind === "revoke" && action.handoff) await revokeHandoffRequest(action.handoff);
+    if (action.kind === "accept" && action.handoff) await acceptHandoffRequest(action.handoff);
+  }
+
+  async function revokeHandoffRequest(handoff: TaskHandoff) {
     setBusyTask(handoff.packageId);
     try {
-      await api(`/api/v1/task-command/handoffs/${handoff.id}/revoke`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: version }) });
+      await api(`/api/v1/task-command/handoffs/${handoff.id}/revoke`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: workspace?.myTasks.find(({ id }) => id === handoff.packageId)?.version ?? 0 }) });
       onNotice("已撤回交接");
       await loadWorkspace();
     } catch (cause) { onNotice(cause instanceof Error ? cause.message : "撤回交接失败"); }
     finally { setBusyTask(""); }
   }
 
-  async function acceptHandoff(handoff: TaskHandoff, version: number) {
-    if (!window.confirm(`确认签收这条交接？签收后任务责任将切换到你的名下。`)) return;
+  async function acceptHandoffRequest(handoff: TaskHandoff) {
     setBusyTask(handoff.packageId);
     try {
-      await api(`/api/v1/task-command/handoffs/${handoff.id}/response`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: version, decision: "accept" }) });
+      const task = workspace?.pendingHandoffs.find(({ handoff: item }) => item.id === handoff.id)?.task;
+      if (!task) throw new Error("任务已不在当前权限范围内");
+      await api(`/api/v1/task-command/handoffs/${handoff.id}/response`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: task.version, decision: "accept" }) });
       onNotice("已签收交接，任务已切换到你的名下");
       await loadWorkspace();
     } catch (cause) { onNotice(cause instanceof Error ? cause.message : "签收失败"); }
     finally { setBusyTask(""); }
   }
 
-  async function rejectHandoff(handoff: TaskHandoff, version: number) {
-    const reason = window.prompt("退回原因（至少 4 字）：");
-    if (reason === null) return;
-    if (!reason.trim() || reason.trim().length < 4) { onNotice("退回必须填写至少 4 字的理由"); return; }
-    setBusyTask(handoff.packageId);
+  async function submitRejectHandoff() {
+    const draft = rejectHandoffDraft;
+    if (!draft) return;
+    if (draft.responseNote.trim().length < 4) { onNotice("退回必须填写至少 4 字的理由"); return; }
+    setRejectHandoffDraft(null);
+    setBusyTask(draft.handoff.packageId);
     try {
-      await api(`/api/v1/task-command/handoffs/${handoff.id}/response`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: version, decision: "reject", responseNote: reason.trim() }) });
+      await api(`/api/v1/task-command/handoffs/${draft.handoff.id}/response`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: draft.version, decision: "reject", responseNote: draft.responseNote.trim() }) });
       onNotice("已退回交接");
       await loadWorkspace();
     } catch (cause) { onNotice(cause instanceof Error ? cause.message : "退回失败"); }
+    finally { setBusyTask(""); }
+  }
+
+  async function submitHandoff() {
+    if (!handoffTask) return;
+    const draft = handoffDraft;
+    if (!draft.toAssigneeId || draft.note.trim().length < 4 || draft.currentProgress.trim().length < 2 || draft.completedWork.trim().length < 2 || draft.pendingWork.trim().length < 2) { onNotice("请完整填写交接对象、说明、当前进度、已完成和未完成"); return; }
+    setBusyTask(handoffTask.id);
+    try {
+      await api(`/api/v1/task-command/packages/${handoffTask.id}/handoffs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: handoffTask.version, toAssigneeId: draft.toAssigneeId, note: draft.note.trim(), currentProgress: draft.currentProgress.trim(), completedWork: draft.completedWork.trim(), pendingWork: draft.pendingWork.trim(), attentionPoints: draft.attentionPoints.trim() || undefined, artifactIds: [], artifactRefs: [] }) });
+      setHandoffTask(null);
+      setHandoffDraft({ toAssigneeId: "", note: "", currentProgress: "", completedWork: "", pendingWork: "", attentionPoints: "" });
+      onNotice("交接已发起，等待对方确认");
+      await loadWorkspace();
+    } catch (cause) { onNotice(cause instanceof Error ? cause.message : "发起交接失败"); }
     finally { setBusyTask(""); }
   }
 
@@ -307,7 +349,7 @@ export function WorkCommandCenter({
             {task.missingFields.length ? <div className="task-template-missing">待补充：{task.missingFields.join("、")}</div> : null}
             {taskHandoffs.length ? <details className="task-handoff-trail"><summary>交接链 · {taskHandoffs.length} 棒{taskHandoffs.some(({ status }) => status === "pending") ? " · 待签收" : ""}</summary>{taskHandoffs.slice(-4).map((handoff) => <div className="task-handoff-line" key={handoff.id}><span>{peopleById.get(handoff.fromAssigneeId)?.displayName ?? "前负责人"}<ArrowRight size={11} />{peopleById.get(handoff.toAssigneeId)?.displayName ?? "接收人"}</span><small>{handoff.status === "pending" ? "待签收" : handoff.status === "accepted" ? "已签收" : handoff.respondedBy === handoff.fromAssigneeId ? "已撤回" : "已退回"} · 文件/资料 {handoff.artifactRefs.length} · v{handoff.snapshot.packageVersion}</small><p>{handoff.note}</p>{handoff.currentProgress ? <p className="task-handoff-field"><b>当前进度</b>{handoff.currentProgress}</p> : null}{handoff.completedWork ? <p className="task-handoff-field"><b>已完成</b>{handoff.completedWork}</p> : null}{handoff.pendingWork ? <p className="task-handoff-field"><b>未完成</b>{handoff.pendingWork}</p> : null}{handoff.attentionPoints ? <p className="task-handoff-field"><b>注意</b>{handoff.attentionPoints}</p> : null}{handoff.responseNote ? <p className="task-handoff-response">{handoff.responseNote}</p> : null}</div>)}</details> : null}
             <details className="task-timeline" onToggle={(event) => { if (event.currentTarget.open) void loadTimeline(task.id); }}><summary>时间线 · {timelines[task.id]?.length ?? 0} 条</summary>{(timelines[task.id] ?? []).map((item) => <div className="task-timeline-line" key={item.id}><span>{timelineEventCopy[item.eventType] ?? item.eventType}</span><small>{formatDate(item.occurredAt)}</small></div>)}</details>
-            {taskMode === "mine" && task.assigneeId && !taskHandoffs.some(({ status }) => status === "pending") && !["in_review", "completed", "cancelled"].includes(task.status) ? <button className="task-handoff-action" type="button" onClick={() => onQueryChange(`我需要正式交接任务“${task.title}”。请先通过 work.get_task_handoff_trail 核验现有交接链和文件/资料引用，再向我确认：交给哪位当前可用成员、交接说明、当前进度、已完成部分、未完成部分和注意事项；确认后用 work.initiate_task_handoff 发起版本 ${task.version} 的交接。`)}>发起交接<ArrowRight size={13} /></button> : null}
+            {taskMode === "mine" && task.assigneeId && !taskHandoffs.some(({ status }) => status === "pending") && !["in_review", "completed", "cancelled"].includes(task.status) ? <button className="task-handoff-action" type="button" onClick={() => { setHandoffTask(task); setHandoffDraft((current) => ({ ...current, toAssigneeId: workspace?.people.find(({ id }) => id !== task.assigneeId)?.id ?? "" })); }}>发起交接<ArrowRight size={13} /></button> : null}
             <footer>{task.isTemplate && taskMode === "published" ? <button onClick={() => onQueryChange(`补充任务模板“${task.title}”，模板 ID 为 ${task.id}，当前版本为 ${task.version}。请先询问我想补充哪些字段，再使用 work.update_task_template 更新；不要正式分派。`)}>补充模板<ArrowRight size={13} /></button> : taskMode === "handoffs" && pendingHandoff ? <><button disabled={busyTask === task.id} onClick={() => void acceptHandoff(pendingHandoff, task.version)}>{busyTask === task.id ? "处理中…" : "签收"}<Check size={13} /></button><button className="task-handoff-reject" disabled={busyTask === task.id} onClick={() => void rejectHandoff(pendingHandoff, task.version)}>退回</button></> : taskMode === "available" ? <button disabled={busyTask === task.id} onClick={() => void claim(task)}>{busyTask === task.id ? "承接中…" : "承接"}<ArrowRight size={13} /></button> : taskMode === "mine" && task.status === "in_progress" ? <button onClick={() => onQueryChange(`任务“${task.title}”已完成执行，请使用 work.update_my_task 工具将任务 ${task.id}（当前版本 ${task.version}）提交验收，并附上证据引用：`)}>提交验收<Check size={13} /></button> : taskMode === "mine" && task.status === "blocked" ? <button disabled={busyTask === task.id} onClick={() => void transition(task, "in_progress")}>解除阻塞<ArrowRight size={13} /></button> : taskMode === "mine" && task.status === "in_review" ? <button onClick={() => onQueryChange(`任务“${task.title}”已通过验收，请使用 work.update_my_task 工具将任务 ${task.id}（当前版本 ${task.version}）标记完成，证据引用为：`)}>完成<ArrowRight size={13} /></button> : <span>{formatRelative(task.dueAt)}</span>}{taskMode === "handoffs" && outgoingHandoffsByTask.has(task.id) ? <button className="task-handoff-revoke" type="button" disabled={busyTask === task.id} onClick={() => void revokeHandoff(outgoingHandoffsByTask.get(task.id)!, task.version)}>{busyTask === task.id ? "撤回中…" : "撤回交接"}<ArrowRight size={13} /></button> : null}</footer>
           </article></div>}); })()}
           </div>
@@ -316,6 +358,9 @@ export function WorkCommandCenter({
         </div>}
       </aside>
     </div>
+    {handoffTask ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-dialog-title"><header><div><span className="command-kicker"><ArrowRight size={13} />TASK HANDOFF</span><h2 id="handoff-dialog-title">发起交接</h2><p>{handoffTask.title} · 当前版本 {handoffTask.version}</p></div><button type="button" className="icon-button" aria-label="关闭发起交接" onClick={() => setHandoffTask(null)}>×</button></header><label>交接给谁<select value={handoffDraft.toAssigneeId} onChange={(event) => setHandoffDraft((current) => ({ ...current, toAssigneeId: event.target.value }))}><option value="">选择成员</option>{workspace?.people.filter(({ id }) => id !== handoffTask.assigneeId).map((person) => <option value={person.id} key={person.id}>{person.displayName} · {person.orgName ?? ""}</option>)}</select></label><label>交接说明<textarea value={handoffDraft.note} onChange={(event) => setHandoffDraft((current) => ({ ...current, note: event.target.value }))} rows={2} /></label><label>当前进度<textarea value={handoffDraft.currentProgress} onChange={(event) => setHandoffDraft((current) => ({ ...current, currentProgress: event.target.value }))} rows={2} /></label><label>已完成<textarea value={handoffDraft.completedWork} onChange={(event) => setHandoffDraft((current) => ({ ...current, completedWork: event.target.value }))} rows={2} /></label><label>未完成<textarea value={handoffDraft.pendingWork} onChange={(event) => setHandoffDraft((current) => ({ ...current, pendingWork: event.target.value }))} rows={2} /></label><label>注意事项（可选）<textarea value={handoffDraft.attentionPoints} onChange={(event) => setHandoffDraft((current) => ({ ...current, attentionPoints: event.target.value }))} rows={2} /></label><footer><button type="button" onClick={() => setHandoffTask(null)}>取消</button><button type="button" className="primary" disabled={busyTask === handoffTask.id} onClick={() => void submitHandoff()}>{busyTask === handoffTask.id ? "提交中…" : "预览并发起"}<ArrowRight size={13} /></button></footer></section></div> : null}
+    {confirmAction ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="task-confirm-title"><h2 id="task-confirm-title">确认操作</h2><p>{confirmAction.kind === "cancel" ? `确认取消任务「${confirmAction.task?.title}」？取消后不可恢复。` : confirmAction.kind === "accept" ? "确认签收交接？签收后任务责任将切换到你的名下。" : "确认撤回交接？对方将不能再签收。"}</p><footer><button type="button" onClick={() => setConfirmAction(null)}>返回</button><button type="button" className="primary" onClick={() => void executeConfirmAction()}>确认</button></footer></section></div> : null}
+    {rejectHandoffDraft ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="reject-handoff-title"><h2 id="reject-handoff-title">退回交接</h2><p>请填写退回原因，至少 4 个字。</p><textarea autoFocus value={rejectHandoffDraft.responseNote} onChange={(event) => setRejectHandoffDraft((current) => current ? { ...current, responseNote: event.target.value } : current)} rows={4} /><footer><button type="button" onClick={() => setRejectHandoffDraft(null)}>取消</button><button type="button" className="primary" onClick={() => void submitRejectHandoff()}>确认退回</button></footer></section></div> : null}
   </div>;
 }
 

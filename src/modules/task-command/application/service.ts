@@ -544,13 +544,36 @@ export class TaskCommandService {
 
   async events(context: RequestContext, after: number, limit = 100) {
     requirePermission(context, "work_task:read");
-    const [items, workspace] = await Promise.all([
-      this.repository.listEvents(context.tenantId, context.actorId, after, 200),
-      this.workspace(context),
-    ]);
-    const visiblePackageIds = new Set([...workspace.myTasks, ...workspace.availableTasks, ...workspace.publishedByMe].map(({ id }) => id));
+    const workspace = await this.workspace(context);
+    const visiblePackageIds = new Set([
+      ...workspace.myTasks,
+      ...workspace.availableTasks,
+      ...workspace.publishedByMe,
+      ...workspace.handoffTasks,
+      ...workspace.pendingHandoffs.map(({ task }) => task),
+    ].map(({ id }) => id));
     const visibleMissionIds = new Set(workspace.missions.map(({ id }) => id));
-    return items.filter((item) => item.packageId ? visiblePackageIds.has(item.packageId) : visibleMissionIds.has(item.missionId)).slice(0, Math.min(limit, 200));
+    const requestedLimit = Math.min(Math.max(limit, 0), 200);
+    if (!requestedLimit) return [];
+
+    // Fetch in chunks until enough visible events are collected. Filtering after a
+    // fixed repository page could otherwise hide later authorized events forever.
+    const result: WorkTaskEvent[] = [];
+    let cursor = after;
+    while (result.length < requestedLimit) {
+      const items = await this.repository.listEvents(context.tenantId, context.actorId, cursor, 200);
+      if (!items.length) break;
+      for (const item of items) {
+        if (item.packageId ? visiblePackageIds.has(item.packageId) : visibleMissionIds.has(item.missionId)) {
+          result.push(item);
+          if (result.length === requestedLimit) break;
+        }
+      }
+      const lastSequence = items.at(-1)?.sequence;
+      if (lastSequence === undefined || items.length < 200 || lastSequence <= cursor) break;
+      cursor = lastSequence;
+    }
+    return result;
   }
 
   async messageEvents(context: RequestContext, after: number, limit = 100) {
@@ -718,6 +741,10 @@ export class TaskCommandService {
     const to = input.to ? new Date(input.to).getTime() : null;
     const rows = packages
       .filter((item) => !item.isTemplate)
+      .filter((item) => input.scope !== "mine" || item.assigneeId === context.actorId)
+      .filter((item) => input.scope !== "published" || item.publishedBy === context.actorId)
+      .filter((item) => !input.status || item.status === input.status)
+      .filter((item) => input.overdueOnly !== "true" || dueStateOf(item) === "overdue")
       .filter((item) => !input.assigneeId || item.assigneeId === input.assigneeId)
       .filter((item) => !input.missionId || item.missionId === input.missionId)
       .filter((item) => { const due = new Date(item.dueAt).getTime(); return (!from || due >= from) && (!to || due <= to); })

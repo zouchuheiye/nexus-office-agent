@@ -125,6 +125,44 @@ describe("D-043: 后台到期提醒 / 负载 / 报表 / 周期摘要", () => {
     expect(byPeriod.rows.length).toBe(1);
   });
 
+  it("F-086/P0: exportReport 支持 scope/status/overdueOnly 过滤器并与任务表筛选项一致", async () => {
+    const { service, publisher, conversation } = await fixture();
+    const nowMs = Date.now();
+    const iso = (offsetDays: number) => new Date(nowMs + offsetDays * 86_400_000).toISOString();
+    const bundle = await service.publishMission(publisher, {
+      conversationId: conversation.id,
+      title: "导出过滤任务",
+      objective: "导出过滤验证。",
+      priority: "high",
+      dueAt: "2030-12-01T00:00:00.000Z",
+      packages: [
+        { title: "我负责·已逾期", description: "B。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_DELIVERY_OWNER_ID, priority: "high", dueAt: iso(-2), startedAt: iso(-30), estimatedDays: 2, capacityPoints: 1 },
+        { title: "我发布·进行中", description: "C。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_PRODUCT_OWNER_ID, priority: "medium", dueAt: iso(10), startedAt: iso(-5), estimatedDays: 5, capacityPoints: 2 },
+        { title: "我发布·已完成", description: "D。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_MANAGER_ID, priority: "low", dueAt: iso(10), startedAt: iso(-5), estimatedDays: 5, capacityPoints: 1 },
+      ],
+    });
+    const taskIds = bundle.packages.map(({ id }) => id);
+    // 直派包初始为 assigned；把第三包按合法路径推进到 completed（in_progress→completed 需证据）
+    const running = await service.transitionPackage(publisher, taskIds[2], { expectedVersion: 1, nextStatus: "in_progress" });
+    await service.transitionPackage(publisher, taskIds[2], { expectedVersion: running.version, nextStatus: "completed", evidenceRefs: ["document:export-accepted"] });
+    // 发布方视角：全部 + status + overdueOnly
+    const byStatus = await service.exportReport(publisher, { status: "completed" });
+    expect(byStatus.rows.map(({ id }) => id)).toEqual([taskIds[2]]);
+    const overdueRows = await service.exportReport(publisher, { overdueOnly: "true" });
+    expect(overdueRows.rows.map(({ id }) => id)).toEqual([taskIds[0]]);
+    // scope=published 只保留我发布（三条）；scope=mine 需要交付负责人身份
+    const publishedScope = await service.exportReport(publisher, { scope: "published" });
+    expect(publishedScope.rows.length).toBe(3);
+    const delivery = { ...createDevelopmentRequestContext("export-delivery"), actorId: DEMO_DELIVERY_OWNER_ID };
+    const deliveryMine = await service.exportReport(delivery, { scope: "mine" });
+    expect(deliveryMine.rows.map(({ id }) => id)).toEqual([taskIds[0]]);
+    const deliveryPublished = await service.exportReport(delivery, { scope: "published" });
+    expect(deliveryPublished.rows).toEqual([]);
+    const combined = await service.exportReport(delivery, { scope: "mine", status: "completed" });
+    expect(combined.rows).toEqual([]);
+    void conversation;
+  });
+
   it("提醒扫描：临期/逾期任务发布公司池提醒，且按天幂等去重", async () => {
     const { service, publisher, conversation } = await fixture();
     const now = new Date();

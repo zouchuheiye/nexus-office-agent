@@ -1,4 +1,4 @@
-import { createDevelopmentRequestContext } from "@/src/platform/context/development-context";
+import { createDevelopmentRequestContext, getDevelopmentIdentityByActorId } from "@/src/platform/context/development-context";
 import { assertRequestContext, type RequestContext } from "@/src/platform/context/request-context";
 import { readCookie, SESSION_COOKIE_NAME, verifySessionCookieWithRotation } from "@/src/platform/identity/session";
 import { enterRequestContext } from "@/src/platform/context/request-context-storage";
@@ -47,6 +47,21 @@ export async function resolveRequestContext(request: Request, authorizationResol
   }
 
   const traceId = request.headers.get("x-trace-id")?.trim() || undefined;
+  const demoSession = readCookie(request, SESSION_COOKIE_NAME);
+  if (demoSession && process.env.SESSION_SECRET) {
+    try {
+      const session = verifySessionCookieWithRotation(demoSession, [process.env.SESSION_SECRET, process.env.SESSION_SECRET_PREVIOUS ?? ""]);
+      const identity = getDevelopmentIdentityByActorId(session.actorId);
+      if (identity && session.tenantId === createDevelopmentRequestContext().tenantId) {
+        const context = createDevelopmentRequestContext(traceId, identity.key, session.sessionId);
+        assertRequestContext(context);
+        enterRequestContext(context);
+        return context;
+      }
+    } catch {
+      // An invalid development cookie is ignored; development falls back to the manager fixture.
+    }
+  }
   const context = createDevelopmentRequestContext(traceId);
   assertRequestContext(context);
   enterRequestContext(context);

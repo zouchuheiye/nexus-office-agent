@@ -31,6 +31,7 @@ export type BoardTask = {
   dueState?: "overdue" | "due_soon" | "normal" | "done";
   publishedBy: string;
   requiredSkills: string[];
+  missingFields?: string[];
   version: number;
 };
 export type Board = {
@@ -55,19 +56,9 @@ export const boardStatusCopy: Record<string, string> = {
 export const boardHealthCopy: Record<string, string> = { healthy: "健康", watch: "需关注", at_risk: "有风险", critical: "高风险" };
 
 export async function readBoard(): Promise<Board> {
-  const [peopleData, tasksData, missionsData] = await Promise.all([
-    api<{ people: BoardPerson[]; actorId: string; generatedAt: string }>("/api/v1/task-command/people", { cache: "no-store" }),
-    api<{ tasks: BoardTask[]; actorId: string; generatedAt: string }>("/api/v1/task-command/packages", { cache: "no-store" }),
-    api<{ missions: BoardMission[]; generatedAt: string }>("/api/v1/task-command/missions", { cache: "no-store" }),
-  ]);
-  return {
-    tasks: tasksData.tasks,
-    people: peopleData.people,
-    missions: missionsData.missions,
-    orgUnits: [],
-    actorId: peopleData.actorId,
-    generatedAt: missionsData.generatedAt || tasksData.generatedAt || peopleData.generatedAt,
-  };
+  // Keep the board, table, filters and aggregates on one authorized fact source.
+  // The server has already applied tenant, permission and visibility checks.
+  return api<Board>("/api/v1/task-command/board", { cache: "no-store" });
 }
 
 export function useTaskBoard(refreshMs = 30_000) {

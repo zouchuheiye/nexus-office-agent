@@ -18,6 +18,9 @@ export async function GET(request: Request) {
     const input = exportReportSchema.parse({
       groupBy: url.searchParams.get("groupBy") ?? undefined,
       format: url.searchParams.get("format") ?? undefined,
+      scope: url.searchParams.get("scope") ?? undefined,
+      status: url.searchParams.get("status") ?? undefined,
+      overdueOnly: url.searchParams.get("overdueOnly") ?? undefined,
       assigneeId: url.searchParams.get("assigneeId") ?? undefined,
       missionId: url.searchParams.get("missionId") ?? undefined,
       from: url.searchParams.get("from") ?? undefined,

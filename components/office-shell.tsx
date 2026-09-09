@@ -16,6 +16,7 @@ import {
   GitBranch,
   GitCommitHorizontal,
   Goal,
+  History,
   Kanban,
   Inbox,
   LayoutDashboard,
@@ -50,6 +51,7 @@ import { ManagementIntelligenceView } from "@/components/management-intelligence
 import { PwaLifecycle } from "@/components/pwa-lifecycle";
 import { WorkCommandCenter } from "@/components/work-command-center";
 import { TaskProgressBoard } from "@/components/task-progress-board";
+import { TaskTimeline } from "@/components/task-timeline";
 import { PiCodingWorkbench } from "@/components/pi-coding-workbench";
 import { PiGovernanceConsole } from "@/components/pi-governance-console";
 import { PiOperationsConsole } from "@/components/pi-operations-console";
@@ -140,6 +142,7 @@ const primaryNav: NavItem[] = [
   { id: "inbox", label: "统一收件箱", icon: Inbox },
   { id: "projects", label: "项目与任务", icon: BriefcaseBusiness },
   { id: "task-progress", label: "任务进度", icon: Kanban },
+  { id: "task-timeline", label: "任务时间线", icon: History },
   { id: "approvals", label: "智能审批", icon: FileCheck2 },
   { id: "people", label: "组织与人才", icon: Users },
   { id: "goals", label: "目标与绩效", icon: Goal },
@@ -208,6 +211,8 @@ export function OfficeShell() {
   const [isThinking, setIsThinking] = useState(false);
   const [confirmingProposal, setConfirmingProposal] = useState("");
   const [notice, setNotice] = useState("");
+  const [developmentIdentities, setDevelopmentIdentities] = useState<Array<{ key: string; actorId: string; displayName: string; roles: string[] }>>([]);
+  const [switchingIdentity, setSwitchingIdentity] = useState(false);
   const [bootstrap, setBootstrap] = useState<WorkspaceBootstrap | null>(null);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
   const [bootstrapError, setBootstrapError] = useState("");
@@ -270,6 +275,16 @@ export function OfficeShell() {
 
   useEffect(() => { void loadBootstrap(); }, [loadBootstrap]);
   useEffect(() => {
+    // The server route itself fails closed when demo identities are disabled
+    // (production without the explicit allow flag / LAN flag), so the client
+    // simply asks and treats an empty or refused answer as "not available".
+    let cancelled = false;
+    void readApi<{ identities: Array<{ key: string; actorId: string; displayName: string; roles: string[] }> }>("/api/v1/auth/development-identities", { cache: "no-store" })
+      .then(({ identities }) => { if (!cancelled) setDevelopmentIdentities(identities); })
+      .catch(() => { if (!cancelled) setDevelopmentIdentities([]); });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
     // The primary conversation is application infrastructure, not a page-local widget.
     // Initialize it even on a deep-linked secondary view so every Agent entry point
     // writes to the same durable thread.
@@ -322,6 +337,31 @@ export function OfficeShell() {
     const url = new URL(window.location.href);
     url.searchParams.set("view", id);
     window.history.pushState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  async function switchDevelopmentIdentity(key: string) {
+    const selected = developmentIdentities.find(({ key: itemKey }) => itemKey === key);
+    if (switchingIdentity || !selected || selected.actorId === identity?.actorId) return;
+    setSwitchingIdentity(true);
+    try {
+      await readApi(`/api/v1/auth/development-identities/switch`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key }),
+      });
+      setActive("command");
+      setQuery("");
+      setPrimaryConversationId("");
+      setMessages([{ role: "assistant", content: "身份已切换。正在重新加载当前权限范围内的工作区。" }]);
+      setSnapshot(null);
+      await loadBootstrap();
+      showNotice("已切换开发验证身份");
+      window.dispatchEvent(new Event("nexus:task-command-changed"));
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "身份切换失败");
+    } finally {
+      setSwitchingIdentity(false);
+    }
   }
 
   async function askAgent(event: FormEvent) {
@@ -415,6 +455,7 @@ export function OfficeShell() {
     command: () => <>
       {bootstrap?.dataMode === "development_fixture" ? <div className="fixture-banner"><ShieldAlert size={14} /><span><strong>本地验证模式</strong> 对话与任务记录来自开发工作区，不代表真实企业。</span></div> : null}
       <WorkCommandCenter
+        key={identity?.actorId ?? "no-identity"}
         messages={messages}
         query={query}
         isThinking={isThinking}
@@ -446,6 +487,7 @@ export function OfficeShell() {
     />,
     projects: () => (selectedProjectId && identity ? <ManagementLoopView projectId={selectedProjectId} actorId={identity.actorId} onNotice={showNotice} /> : <ProjectRequiredState onReturn={() => chooseNav("today")} />),
     "task-progress": () => <TaskProgressBoard />,
+    "task-timeline": () => <TaskTimeline />,
     integrations: () => <IntegrationCenterView onNotice={showNotice} />,
     client: () => <ClientPlatformView onNotice={showNotice} />,
     "management-intelligence": () => <ManagementIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} />,
@@ -481,6 +523,7 @@ export function OfficeShell() {
           <button className={active === "client" ? "active" : ""} onClick={() => chooseNav("client")}><Smartphone size={16} /><span>设备与客户端</span></button>
           <button className={active === "integrations" ? "active" : ""} onClick={() => chooseNav("integrations")}><Settings size={16} /><span>系统与集成</span></button>
           <div className="account-chip"><Avatar name={identity?.displayName ?? "用户"} /><span><strong>{identity?.displayName ?? "未认证用户"}</strong><small>{identity ? roleLabel(identity.roles) : "等待身份上下文"}</small></span></div>
+          {developmentIdentities.length ? <label className="development-identity-switch"><span>开发验证身份</span><select aria-label="切换开发验证身份" value={identity?.actorId ?? ""} disabled={switchingIdentity} onChange={(event) => { const selected = developmentIdentities.find(({ actorId }) => actorId === event.target.value); if (selected) void switchDevelopmentIdentity(selected.key); }}>{developmentIdentities.map((item) => <option key={item.key} value={item.actorId}>{item.displayName}</option>)}</select></label> : null}
         </div>
       </aside>
 

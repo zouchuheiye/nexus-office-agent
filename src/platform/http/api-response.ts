@@ -14,6 +14,9 @@ type ErrorRule = {
 const codes = (list: string[]) => (code: string) => list.includes(code);
 
 const errorRules: ErrorRule[] = [
+  { match: codes(["DEMO_IDENTITY_DISABLED"]), status: 403, message: "当前环境未开启开发身份切换。" },
+  { match: codes(["DEMO_IDENTITY_NOT_FOUND"]), status: 404, message: "开发身份不存在或已被禁用。" },
+  { match: codes(["DEMO_IDENTITY_SECRET_MISSING"]), status: 503, message: "开发身份会话签名依赖未配置，系统已安全关闭切换。" },
   { match: codes(["ACCESS_DENIED"]), status: 403, message: "当前身份无权访问 Agent 开发工作流。" },
   { match: codes(["AGENT_DEVELOPMENT_PROJECT_NOT_FOUND"]), status: 404, message: "Agent 开发项目不存在或不属于当前租户。" },
   { match: codes(["AGENT_DEVELOPMENT_ARCHIVE_INCOMPLETE", "AGENT_DEVELOPMENT_REQUIREMENT_ARCHIVE_REQUIRED", "AGENT_DEVELOPMENT_VERSION_REQUIRED", "AGENT_DEVELOPMENT_VERSION_EVIDENCE_REQUIRED", "AGENT_DEVELOPMENT_TEST_GATE_REQUIRED", "AGENT_DEVELOPMENT_ALREADY_DELIVERED", "AGENT_DEVELOPMENT_VERSION_NAME_CONFLICT", "AGENT_DEVELOPMENT_VERSION_NOT_FOUND", "AGENT_DEVELOPMENT_VERSION_CONFLICT", "AGENT_DEVELOPMENT_IDEMPOTENCY_CONFLICT"]), status: 409, message: "上一阶段尚未完成留档，当前操作已被工作流门禁阻止。" },

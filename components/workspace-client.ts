@@ -24,7 +24,18 @@ export type TaskHandoffEntry = {
   task: WorkspaceTask;
   direction: "incoming" | "outgoing";
 };
-export type TimelineEvent = { id: string; sequence: number; eventType: string; actorId: string; occurredAt: string; payload: Record<string, unknown> };
+export type TimelineEvent = {
+  id: string;
+  sequence: number;
+  tenantId?: string;
+  missionId?: string;
+  packageId?: string;
+  eventType: string;
+  actorId: string;
+  audience?: "tenant" | "participants";
+  occurredAt: string;
+  payload: Record<string, unknown>;
+};
 export type PersistedMessage = { id: string; role: "user" | "assistant" | "tool"; content: string; runId?: string; route: { skills: string[]; tools: string[] }; citations: Array<{ id: string; label: string; excerpt: string; objectType: string }>; createdAt: string };
 export type WorkspaceData = {
   conversation: { id: string; title: string };

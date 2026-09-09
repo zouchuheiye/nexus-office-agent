@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { RequestContext } from "@/src/platform/context/request-context";
+import type { DataScope, RequestContext } from "@/src/platform/context/request-context";
 
 export const DEMO_TENANT_ID = "00000000-0000-4000-8000-000000000001";
 export const DEMO_MANAGER_ID = "10000000-0000-4000-8000-000000000001";
@@ -166,15 +166,90 @@ const DEVELOPMENT_PERMISSIONS = [
   "agent_development:deliver",
 ];
 
-export function createDevelopmentRequestContext(traceId: string = randomUUID()): RequestContext {
-  return {
-    tenantId: DEMO_TENANT_ID,
+export type DevelopmentIdentityKey = "manager" | "delivery" | "product" | "operations";
+
+export type DevelopmentIdentity = {
+  key: DevelopmentIdentityKey;
+  actorId: string;
+  displayName: string;
+  roles: string[];
+  permissions: string[];
+  dataScopes: DataScope[];
+};
+
+const DEVELOPMENT_IDENTITIES: readonly DevelopmentIdentity[] = [
+  {
+    key: "manager",
     actorId: DEMO_MANAGER_ID,
-    sessionId: "development-session",
-    channel: "web",
-    traceId,
+    displayName: "开发管理员",
     roles: ["enterprise_manager"],
     permissions: [...DEVELOPMENT_PERMISSIONS],
     dataScopes: [{ type: "tenant" }],
+  },
+  {
+    key: "delivery",
+    actorId: "10000000-0000-4000-8000-000000000002",
+    displayName: "周然",
+    roles: ["project_manager"],
+    permissions: [
+      "project:read", "objective:read", "risk:read", "task:read", "action_item:read",
+      "work_task:read", "work_task:claim", "work_task:update", "work_task:handoff", "work_task:accept_handoff",
+      "message_pool:read", "memory:read", "client:bootstrap:read",
+    ],
+    dataScopes: [{ type: "tenant" }],
+  },
+  {
+    key: "product",
+    actorId: "10000000-0000-4000-8000-000000000003",
+    displayName: "林悦",
+    roles: ["project_manager"],
+    permissions: [
+      "project:read", "objective:read", "risk:read", "task:read", "action_item:read",
+      "work_task:read", "work_task:claim", "work_task:update", "work_task:handoff", "work_task:accept_handoff",
+      "message_pool:read", "memory:read", "client:bootstrap:read",
+    ],
+    dataScopes: [{ type: "tenant" }],
+  },
+  {
+    key: "operations",
+    actorId: "10000000-0000-4000-8000-000000000004",
+    displayName: "陈屿",
+    roles: ["project_manager"],
+    permissions: [
+      "project:read", "objective:read", "risk:read", "task:read", "action_item:read",
+      "work_task:read", "work_task:claim", "work_task:update", "work_task:handoff", "work_task:accept_handoff",
+      "message_pool:read", "memory:read", "client:bootstrap:read",
+    ],
+    dataScopes: [{ type: "tenant" }],
+  },
+];
+
+export function listDevelopmentIdentities(): Array<Pick<DevelopmentIdentity, "key" | "actorId" | "displayName" | "roles">> {
+  return DEVELOPMENT_IDENTITIES.map(({ key, actorId, displayName, roles }) => ({ key, actorId, displayName, roles: [...roles] }));
+}
+
+export function getDevelopmentIdentity(key: string | undefined): DevelopmentIdentity | undefined {
+  return DEVELOPMENT_IDENTITIES.find((identity) => identity.key === key);
+}
+
+export function getDefaultDevelopmentIdentity(): DevelopmentIdentity {
+  return DEVELOPMENT_IDENTITIES[0];
+}
+
+export function getDevelopmentIdentityByActorId(actorId: string): DevelopmentIdentity | undefined {
+  return DEVELOPMENT_IDENTITIES.find((identity) => identity.actorId === actorId);
+}
+
+export function createDevelopmentRequestContext(traceId: string = randomUUID(), identityKey?: string, sessionId = "development-session"): RequestContext {
+  const identity = getDevelopmentIdentity(identityKey) ?? getDefaultDevelopmentIdentity();
+  return {
+    tenantId: DEMO_TENANT_ID,
+    actorId: identity.actorId,
+    sessionId,
+    channel: "web",
+    traceId,
+    roles: [...identity.roles],
+    permissions: [...identity.permissions],
+    dataScopes: structuredClone(identity.dataScopes),
   };
 }

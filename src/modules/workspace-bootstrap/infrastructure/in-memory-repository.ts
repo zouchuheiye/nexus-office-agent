@@ -1,15 +1,16 @@
 import type { WorkspaceBootstrapRepository } from "@/src/modules/workspace-bootstrap/application/contracts";
 import { getDevelopmentManagementRepository } from "@/src/modules/management-loop/infrastructure/in-memory-repository";
-import { DEMO_MANAGER_ID, DEMO_PROJECT_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
+import { DEMO_PROJECT_ID, DEMO_TENANT_ID, getDevelopmentIdentityByActorId } from "@/src/platform/context/development-context";
 
 export class InMemoryWorkspaceBootstrapRepository implements WorkspaceBootstrapRepository {
   async getIdentity(tenantId: string, actorId: string) {
-    if (tenantId !== DEMO_TENANT_ID || actorId !== DEMO_MANAGER_ID) return null;
+    const identity = getDevelopmentIdentityByActorId(actorId);
+    if (tenantId !== DEMO_TENANT_ID || !identity) return null;
     return {
       tenantId,
       tenantName: "本地开发工作区",
       actorId,
-      displayName: "开发管理员",
+      displayName: identity.displayName,
     };
   }
 

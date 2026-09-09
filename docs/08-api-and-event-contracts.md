@@ -53,15 +53,22 @@ type RequestContext = {
 /agent/runs /agent/proposals /confirmations
 /integrations /integrations/:id/sync /integrations/:id/health
 /notifications /inbox
-/task-command/workspace /task-command/missions /task-command/templates /task-command/message-pools/messages
+/task-command/workspace /task-command/board /task-command/people
+/task-command/missions /task-command/packages /task-command/templates /task-command/message-pools/messages
 /task-command/templates/:id
 /task-command/packages/:id/claim /task-command/packages/:id/transition /task-command/packages/:id/handoffs
-/task-command/handoffs/:id/response
-/task-command/events
+/task-command/packages/:id/timeline /task-command/handoffs/:id/response
+/task-command/reports/export /task-command/events
+/task-command/timeline
+/auth/development-identities /auth/development-identities/switch
 /admin/policies /admin/audit /admin/models
 ```
 
-经营管理写入遵循同一闭环契约：带 `riskId` 的决定或问题必须引用当前租户、同一项目中的风险；决定、行动项与对应 Outbox 事件在同一租户事务中提交。行动完成与任务状态迁移必须提交当前 `version`，服务端使用 compare-and-set 拒绝丢失更新；行动进入 `completed` 时必须同时保存非空完成证据。版本冲突返回 `409`，不存在的关联对象返回 `404`。
+`GET /api/v1/task-command/board` 返回当前身份可见的任务、成员负载、使命与组织单元，作为任务看板、表格与筛选的单一授权数据源。`GET /api/v1/task-command/people` 返回成员负载只读视图。`GET /api/v1/task-command/reports/export` 复用该数据源并按 `scope=all|mine|published`、`status`、`overdueOnly`、`assigneeId`、`missionId`、`from/to` 过滤导出，行内容与页面筛选项一致。
+
+`GET /api/v1/task-command/timeline?after=0&limit=50` 返回当前身份有权查看的任务事件历史，按服务端 `sequence` 返回，并以 `{ events, nextCursor, hasMore, generatedAt }` 包装。`after` 为非负游标，`limit` 最大 100；服务端执行租户和任务可见性过滤。它只读取 `work_task_events`，不混入消息池或数据库审计事件。`/task-command/events` 仍是用于刷新提示的 SSE，不替代该历史接口。
+
+开发/内网验证身份仅在本机开发或显式开启 `NEXUS_ALLOW_DEMO_IDENTITY` 时提供：`GET /auth/development-identities` 列出服务端定义的可选身份（不含权限明细），`POST /auth/development-identities/switch` 用 `key` 签发已签名会话 Cookie。关闭或未开启时二者分别返回 `403 DEMO_IDENTITY_DISABLED` 与 `503 DEMO_IDENTITY_SECRET_MISSING`，不会退化为任意扮演。
 
 会议确认转化的决定保存 `sourceMeetingId`，服务端校验来源会议和决定属于同一租户、同一项目；行动项通过 `decisionId` 关联该决定。知识搜索只返回当前已生效且未过期版本，并在引用中返回原始 `sourceRef`、版本定位、有效时间和不泄露 ACL 明细的 `accessBasis`。
 
