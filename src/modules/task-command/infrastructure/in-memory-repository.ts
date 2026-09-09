@@ -1,5 +1,5 @@
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
-import { createWorkConversation, type WorkArtifact, type WorkArtifactVersion, type WorkConversation, type WorkConversationMessage, type WorkMessageEvent, type WorkMission, type WorkOrgUnit, type WorkPackage, type WorkPerson, type WorkPoolFeedback, type WorkPoolMessage, type WorkTaskEvent, type WorkTaskHandoff } from "@/src/modules/task-command/domain/task-command";
+import { createWorkConversation, type WorkArtifact, type WorkArtifactVersion, type WorkConversation, type WorkConversationMessage, type WorkMessageEvent, type WorkMission, type WorkOrgUnit, type WorkPackage, type WorkPackageSubtask, type WorkPerson, type WorkPoolFeedback, type WorkPoolMessage, type WorkTaskEvent, type WorkTaskHandoff } from "@/src/modules/task-command/domain/task-command";
 import { DEMO_MANAGER_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
 
 export const DEMO_DELIVERY_OWNER_ID = "10000000-0000-4000-8000-000000000002";
@@ -15,6 +15,7 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
   private readonly messages: WorkConversationMessage[] = [];
   private readonly missions: WorkMission[] = [];
   private readonly packages: WorkPackage[] = [];
+  private readonly subtasks = new Map<string, WorkPackageSubtask>();
   private readonly events: WorkTaskEvent[] = [];
   private readonly handoffs: WorkTaskHandoff[] = [];
   private readonly artifacts = new Map<string, WorkArtifact>();
@@ -77,6 +78,43 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
   async listMissions(tenantId: string) { return structuredClone(this.missions.filter((item) => item.tenantId === tenantId)); }
   async listPackages(tenantId: string) { return structuredClone(this.packages.filter((item) => item.tenantId === tenantId)); }
   async getPackage(tenantId: string, id: string) { return structuredClone(this.packages.find((item) => item.tenantId === tenantId && item.id === id) ?? null); }
+
+  async listPackageSubtasks(tenantId: string, packageId: string) {
+    return structuredClone([...this.subtasks.values()]
+      .filter((item) => item.tenantId === tenantId && item.packageId === packageId)
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)));
+  }
+
+  async listPackageSubtaskProgress(tenantId: string, packageIds: string[]) {
+    const wanted = new Set(packageIds);
+    const byPackage = new Map<string, { done: number; total: number }>();
+    for (const item of this.subtasks.values()) {
+      if (item.tenantId !== tenantId || !wanted.has(item.packageId)) continue;
+      const entry = byPackage.get(item.packageId) ?? { done: 0, total: 0 };
+      entry.total += 1;
+      if (item.status === "done") entry.done += 1;
+      byPackage.set(item.packageId, entry);
+    }
+    return [...byPackage.entries()].map(([packageId, value]) => ({ packageId, ...value }));
+  }
+
+  async savePackageSubtask(subtask: WorkPackageSubtask, event: Omit<WorkTaskEvent, "sequence">) {
+    const key = `${subtask.tenantId}:${subtask.packageId}:${subtask.id}`;
+    const current = this.subtasks.get(key);
+    if (current && current.version !== subtask.version - 1) return false;
+    this.subtasks.set(key, structuredClone(subtask));
+    this.events.push({ ...structuredClone(event), sequence: ++this.sequence });
+    return true;
+  }
+
+  async deletePackageSubtask(tenantId: string, packageId: string, subtaskId: string, expectedVersion: number, event: Omit<WorkTaskEvent, "sequence">) {
+    const key = `${tenantId}:${packageId}:${subtaskId}`;
+    const current = this.subtasks.get(key);
+    if (!current || current.version !== expectedVersion) return false;
+    this.subtasks.delete(key);
+    this.events.push({ ...structuredClone(event), sequence: ++this.sequence });
+    return true;
+  }
 
   async publishMission(mission: WorkMission, packages: WorkPackage[], events: Omit<WorkTaskEvent, "sequence">[]) {
     const existing = mission.sourceRunId ? this.missions.find((item) => item.tenantId === mission.tenantId && item.sourceRunId === mission.sourceRunId) : undefined;

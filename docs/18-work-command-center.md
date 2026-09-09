@@ -38,6 +38,8 @@ flowchart LR
 
 验收是发布人的决定，不是执行人的自助操作：任务进入 `in_review` 后，只有发布人或管理员能把状态推进到 `completed`（通过）或退回 `in_progress`（退回必须填原因）。退回原因（`reviewNote`）与决定（`accept`/`reject`）写入 `work_task_events` 的 `package_status_changed` payload，事件链可追溯。网页“我的/已发布”任务栏提供直连的“提交验收（附证据）→ 通过/退回”按钮；AI 只可起草验收意见，不能代为通过或退回。
 
+任务卡内的子任务（P3）把任务拆成可勾选清单，进度 = 已完成/总数：发布人、承接人和管理员都可新增子任务（每行记录拆分人），勾选完成时可附完成说明与可核验证据引用（格式同任务验收），也可重新打开或删除；每条变更写入 `work_task_events` 的 `package_progress_updated`，网页任务对象带聚合进度 `progress:{done,total}`。若任务已拆分，必须所有子任务完成后才能提交验收（服务端 `WORK_PACKAGE_SUBTASKS_PENDING` 拦截，任务栏同步禁用“提交验收”按钮并显示剩余项）；任务进入 `in_review/completed/cancelled` 后子任务清单锁定（不能再增删改），发布人退回 `in_progress` 后恢复。AI 只负责起草拆分与勾选建议：`work.add_package_subtask`/`work.update_package_subtask` 只生成待人工确认的 R3 提案，不会直接改子任务状态；`work.list_package_subtasks` 为只读核验工具。
+
 发布任务提供双入口：口述/委托走主对话的 Agent（`work.publish_task_bundle`，R3 人工确认）；表单录入直接走任务栏“发布任务”对话框 → `POST /api/v1/task-command/missions`（`source=human`，以当前已认证主体与权限门禁为边界）。表单允许一次使命携带 1..N 个任务包，支持定向分派（指定负责人）或开放承接（可限定部门）；说明/验收标准/所需技能等留空时仍会发布，由服务端标记为“待补充”，不要求录入者先编造内容。
 
 ### 2.1 任务交接链
@@ -100,6 +102,7 @@ flowchart LR
 - `work_pool_feedback`：消息下的沟通反馈，不与任务证据混用。
 - `work_message_events`：单调递增 sequence 的消息/反馈更新提示。
 - `work_task_handoffs`：任务每一棒的责任、冻结任务快照、文件/资料引用、签收/退回结果和 Agent 幂等来源。
+- `work_package_tasks`（`0048_work_package_subtasks.sql`）：任务包子任务清单；每行带完成状态、排序、完成人/时间/说明、可核验证据引用与版本，变更随 `package_progress_updated` 事件追加审计。
 - `agent_memory_entries`：分级对话、上下文、长期、任务和情景记忆；带来源、可见性、数据分级、到期、版本、RLS 与原子审计。详见 [分级记忆设计](./22-tiered-agent-memory.md)。
 
 所有表启用并强制 RLS，业务变更触发原子摘要审计。任务承接和状态更新在同一租户事务中以版本条件更新并追加事件，避免双重承接或“状态变了但事件丢失”。消息池不承担任务治理，但仍保留租户隔离、当前可见范围过滤和审计；其事件流只提示刷新，不含未授权正文。
@@ -128,6 +131,10 @@ flowchart LR
 | `POST` | `/api/v1/task-command/missions` | 人工发布一个使命与任务包集合 |
 | `POST` | `/api/v1/task-command/packages/{id}/claim` | 用 `expectedVersion` 主动承接 |
 | `POST` | `/api/v1/task-command/packages/{id}/transition` | 用 `expectedVersion` 推进状态、提交证据或阻塞原因 |
+| `GET` | `/api/v1/task-command/packages/{id}/subtasks` | 只读列出子任务与进度（done/total） |
+| `POST` | `/api/v1/task-command/packages/{id}/subtasks` | 新增子任务（发布人/承接人/管理员） |
+| `PATCH` | `/api/v1/task-command/packages/{id}/subtasks/{subtaskId}` | 勾选完成或重新打开，带子任务 `expectedVersion` |
+| `DELETE` | `/api/v1/task-command/packages/{id}/subtasks/{subtaskId}` | 删除子任务，带子任务 `expectedVersion` 查询参数 |
 | `GET` | `/api/v1/task-command/packages/{id}/handoffs` | 查询当前身份可见的完整交接链和资料快照 |
 | `POST` | `/api/v1/task-command/packages/{id}/handoffs` | 发起正式交接，保留原负责人至目标签收 |
 | `POST` | `/api/v1/task-command/handoffs/{id}/response` | 目标接收人签收或退回交接 |

@@ -1,4 +1,4 @@
-import type { WorkArtifact, WorkArtifactVersion, WorkConversation, WorkConversationMessage, WorkMessageEvent, WorkMission, WorkOrgUnit, WorkPackage, WorkPerson, WorkPoolFeedback, WorkPoolMessage, WorkTaskEvent, WorkTaskHandoff } from "@/src/modules/task-command/domain/task-command";
+import type { WorkArtifact, WorkArtifactVersion, WorkConversation, WorkConversationMessage, WorkMessageEvent, WorkMission, WorkOrgUnit, WorkPackage, WorkPackageSubtask, WorkPerson, WorkPoolFeedback, WorkPoolMessage, WorkTaskEvent, WorkTaskHandoff } from "@/src/modules/task-command/domain/task-command";
 
 export interface TaskCommandRepository {
   getOrCreatePrimaryConversation(tenantId: string, ownerId: string): Promise<WorkConversation>;
@@ -9,6 +9,10 @@ export interface TaskCommandRepository {
   listMissions(tenantId: string): Promise<WorkMission[]>;
   listPackages(tenantId: string): Promise<WorkPackage[]>;
   getPackage(tenantId: string, id: string): Promise<WorkPackage | null>;
+  listPackageSubtasks(tenantId: string, packageId: string): Promise<WorkPackageSubtask[]>;
+  listPackageSubtaskProgress(tenantId: string, packageIds: string[]): Promise<Array<{ packageId: string; done: number; total: number }>>;
+  savePackageSubtask(subtask: WorkPackageSubtask, event: Omit<WorkTaskEvent, "sequence">): Promise<boolean>;
+  deletePackageSubtask(tenantId: string, packageId: string, subtaskId: string, expectedVersion: number, event: Omit<WorkTaskEvent, "sequence">): Promise<boolean>;
   publishMission(mission: WorkMission, packages: WorkPackage[], events: Omit<WorkTaskEvent, "sequence">[]): Promise<{ mission: WorkMission; packages: WorkPackage[]; created: boolean }>;
   updateTaskTemplate(input: { currentMission: WorkMission; nextMission: WorkMission; currentPackage: WorkPackage; nextPackage: WorkPackage; expectedVersion: number; event: Omit<WorkTaskEvent, "sequence"> }): Promise<boolean>;
   claimPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number }): Promise<boolean>;

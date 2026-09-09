@@ -16,7 +16,7 @@ describe("Postgres task command repository", () => {
 
   beforeEach(async () => {
     database = new PGlite();
-    const migrations = ["0001_foundation.sql","0002_management_loop.sql","0003_agent_platform.sql","0004_connector_platform.sql","0005_workflow_knowledge.sql","0006_strategy_organization_talent.sql","0007_client_platform.sql","0008_security_hardening.sql","0009_atomic_audit.sql","0010_immutable_audit.sql","0011_enterprise_governance.sql","0012_enterprise_acceptance.sql","0013_connector_test_notifications.sql","0014_durable_runtime.sql","0015_agent_job_control.sql","0016_management_intelligence.sql","0017_work_command_center.sql","0018_work_message_pools.sql","0019_work_task_handoffs.sql","0023_work_artifact_evidence_chain.sql","0043_work_task_templates.sql","0045_work_task_progress_tracking.sql","0046_work_task_handoff_card.sql","0047_announcement_center.sql"];
+    const migrations = ["0001_foundation.sql","0002_management_loop.sql","0003_agent_platform.sql","0004_connector_platform.sql","0005_workflow_knowledge.sql","0006_strategy_organization_talent.sql","0007_client_platform.sql","0008_security_hardening.sql","0009_atomic_audit.sql","0010_immutable_audit.sql","0011_enterprise_governance.sql","0012_enterprise_acceptance.sql","0013_connector_test_notifications.sql","0014_durable_runtime.sql","0015_agent_job_control.sql","0016_management_intelligence.sql","0017_work_command_center.sql","0018_work_message_pools.sql","0019_work_task_handoffs.sql","0023_work_artifact_evidence_chain.sql","0043_work_task_templates.sql","0045_work_task_progress_tracking.sql","0046_work_task_handoff_card.sql","0047_announcement_center.sql","0048_work_package_subtasks.sql"];
     for (const file of migrations) await database.exec(await readFile(path.resolve("src/platform/database/migrations", file), "utf8"));
     const executor: DatabaseExecutor = { async query<T extends Record<string, unknown>>(sql: string, params: SqlPrimitive[] = []) { return (await database.query<T>(sql, params as never[])).rows; } };
     const adapter: TransactionalDatabase = {
@@ -125,5 +125,41 @@ startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7,         priority: "high
     expect(me?.inProgressTaskCount).toBe(1);
     expect(me?.capacityPoints).toBe(4);
     expect(me?.dueSoonTaskCount).toBe(0);
+  });
+
+  it("P3: persists package subtasks with version CAS, progress aggregation and the review lock", async () => {
+    const publisher = createDevelopmentRequestContext("postgres-subtasks");
+    const conversation = (await service.workspace(publisher)).conversation;
+    const task = (await service.publishMission(publisher, {
+      conversationId: conversation.id,
+      title: "子任务持久化",
+      objective: "验证子任务在 PostgreSQL 中落库与加锁。",
+      priority: "high",
+      dueAt: "2030-09-01T10:00:00.000Z",
+      packages: [{ title: "拆分子任务包", description: "把验收拆成可勾选步骤。", acceptanceCriteria: "子步骤齐全。", requiredSkills: ["交付"], assignmentMode: "open_claim", priority: "high", dueAt: "2030-08-30T10:00:00.000Z", startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7, capacityPoints: 3 }],
+    })).packages[0];
+    const member = { ...createDevelopmentRequestContext("postgres-subtask-member"), actorId: MEMBER_ID };
+    await service.claimPackage(member, task.id, task.version);
+    // 进入进行中后可拆；承接人拆两条
+    const running = await service.transitionPackage(member, task.id, { expectedVersion: 2, nextStatus: "in_progress" });
+    const first = await service.addPackageSubtask(member, { packageId: task.id, title: "整理客户清单" });
+    const second = await service.addPackageSubtask(member, { packageId: task.id, title: "汇编签字页" });
+    expect((await service.listPackageSubtasks(member, { packageId: task.id })).progress).toEqual({ done: 0, total: 2 });
+    // 未全部完成时，承接人不能把任务推进到验收
+    await expect(service.transitionPackage(member, task.id, { expectedVersion: running.version, nextStatus: "in_review", evidenceRefs: ["document:evidence"] })).rejects.toThrow("WORK_PACKAGE_SUBTASKS_PENDING");
+    // 勾选第一项：CAS 生效、重复旧版本失败
+    const done = await service.updatePackageSubtask(member, { packageId: task.id, subtaskId: first.subtask.id, expectedVersion: first.subtask.version, done: true, note: "清单已核", evidenceRefs: ["https://example.test/evidence.pdf"] });
+    await expect(service.updatePackageSubtask(member, { packageId: task.id, subtaskId: first.subtask.id, expectedVersion: first.subtask.version, done: true })).rejects.toThrow("WORK_PACKAGE_SUBTASK_CONFLICT");
+    // 勾选第二项后进入验收；验收后不可再改子任务
+    await service.updatePackageSubtask(member, { packageId: task.id, subtaskId: second.subtask.id, expectedVersion: second.subtask.version, done: true });
+    const submitted = await service.transitionPackage(member, task.id, { expectedVersion: running.version, nextStatus: "in_review", evidenceRefs: ["document:evidence"] });
+    await expect(service.updatePackageSubtask(member, { packageId: task.id, subtaskId: first.subtask.id, expectedVersion: done.subtask.version, done: false })).rejects.toThrow("WORK_PACKAGE_SUBTASKS_LOCKED");
+    expect(submitted.status).toBe("in_review");
+    // 重新查询：进度与完成字段在重启式查询中保持
+    const reloaded = await service.listPackageSubtasks(member, { packageId: task.id });
+    expect(reloaded.progress).toEqual({ done: 2, total: 2 });
+    expect(reloaded.subtasks.find((item) => item.id === first.subtask.id)).toMatchObject({ status: "done", doneBy: MEMBER_ID, doneNote: "清单已核", evidenceRefs: ["https://example.test/evidence.pdf"] });
+    const rows = await database.query<{ event_type: string; payload: Record<string, unknown> }>("SELECT event_type,payload FROM work_task_events WHERE package_id=$1 AND event_type='package_progress_updated' ORDER BY sequence", [task.id]);
+    expect(rows.rows.map(({ payload }) => payload.action)).toEqual(["subtask_created", "subtask_created", "subtask_completed", "subtask_completed"]);
   });
 });

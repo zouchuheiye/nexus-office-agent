@@ -32,6 +32,7 @@ export type BoardTask = {
   publishedBy: string;
   requiredSkills: string[];
   missingFields?: string[];
+  progress?: { done: number; total: number };
   version: number;
 };
 export type Board = {

@@ -24,7 +24,8 @@
 - [x] P2：发起交接支持 AI 起草结构化交接单 + 可编辑预览卡：AI 起草仍走 Agent 生成 R3 提案，「修正草稿」以 amend 编辑交接单字段（交接对象/说明/当前进度/已完成/未完成/注意点/交付物引用等 tool input 逐字段可改）并生成需再次确认的新提案；直连“发起交接”表单通道保留。
 - [x] P2：发布任务提供表单录入入口（任务栏“发布任务”按钮 + 表单对话框：使命标题/目标/优先级/截止 + 1..N 任务包：定向或开放承接、负责人/部门、说明/验收/技能/工期/容量点）；服务端复用 `POST /missions`（human），缺省字段仍标记“待补充”，口述走 AI 的既有通道保留。
 - [x] P2：AI 起草的提案卡升级为可编辑预览卡——服务端 amend/supersede（`GET/POST /api/v1/agent/proposals/:id[/amend]`）已实现并通过单元/集成测试；网页对话提案卡新增「修正草稿」：读取结构化输入、按字段编辑（标量/日期/字符串数组用输入框，嵌套结构用 JSON 子编辑器）、保存后旧提案作废、生成需再次确认的新提案。
-- [ ] P3/P4/P5：子任务模型与 AI 勾选、通知链路、体验细节按产品后续排期推进（本任务不替代产品决策）。
+- [x] P3（第一批，按第六节推荐值）：任务包子任务拆分/勾选/重开/删除 + 进度 done/total + 验收门禁 + AI 只起草勾选建议（R3 确认）。
+- [ ] P3（后续）/P4/P5：子任务证据附件上传、通知链路、体验细节按产品后续排期推进（本任务不替代产品决策）。
 
 ## Invariants
 
@@ -36,8 +37,9 @@
 
 ## Decisions
 
-- 按用户确认，本轮先收尾 P0（任务表+进度表视图）与 P1（多身份选人登录）为可提交里程碑，随后继续 P2 双通道补齐；P3–P5 记录为后续排期，不在本轮虚构完成。
+- 按用户确认，本轮先收尾 P0（任务表+进度表视图）与 P1（多身份选人登录）为可提交里程碑，随后继续 P2 双通道补齐；P3 拆分/勾选按用户“全部按推荐执行”落地，P4/P5 记录为后续排期。
 - 第六节待确认决策点按文档建议值执行：子任务双方可拆（P3）、提交验收一键确认、验证版选人登录 + 正式 OIDC 后置、进度口径先用状态+剩余天数+逾期、4B 模型档位、验收证据先做字符串格式约束后补附件上传。
+- P3 六项决策均按推荐执行：双方可拆（含承接人，记拆分人）；AI 只起草勾选建议、R3 待人工确认；有子任务时必须全部完成才能 in_review；in_review/completed/cancelled 后禁止增删改子任务、退回 in_progress 恢复；子任务两态 pending/done（可选完成说明与可核验证据）；进度 = done/total。
 - 任务表/进度聚合的数据源统一收敛到 `/task-command/board`，避免页面口径与导出不一致；导出过滤参数（scope/status/overdueOnly）由 exportReportSchema 与导出路由同时承接。
 - P1 身份切换以签名会话 Cookie 承载，服务端按 actorId 反查白名单身份重建权限集；演示身份不复制正式权限语义。
 
@@ -55,28 +57,33 @@
 - P2 服务端边界：`transitionPackageSchema` 增补 `reviewNote`；从 `in_review` 离开到 `completed`（decision=accept）或退回 `in_progress`（decision=reject + reviewNote）只允许发布人或管理员，执行人自我验收返回 `POLICY_DENIED:work_task:review_decision`，退回无原因返回 `WORK_REVIEW_RETURN_REASON_REQUIRED`；决定与原因进入 `package_status_changed` 事件 payload。
 - 新增开发身份 API 集成测试（列表/生产关闭/缺密钥/未知 key/轮换签名/跨租户伪造拒绝）与“切换后 bootstrap/board 解析为周然”的 P1 端到端覆盖；新增 P2 验收流转单测（执行人不可自我验收、发布人退回带原因入事件链、再提交后通过 decision=accept）；新增 F-086/P0 导出过滤测试。
 - 时间线只读视图与历史接口沿用既有实现并随本批复核；相关文档（docs/08、docs/18）同步补充。
+- P3 服务端：`work_package_tasks` 迁移 0048（+down，含事件类型扩展 `package_progress_updated`）；域模型新增子任务两态、进度聚合、CAS 版本、锁定/验收门禁（`WORK_PACKAGE_SUBTASKS_PENDING` / `WORK_PACKAGE_SUBTASKS_LOCKED`）；InMemory/Postgres 仓储新增 list/save/delete/进度聚合；服务新增 list/add/update/deletePackageSubtask 并把 `progress:{done,total}` 挂到工作区任务；路由 `GET/POST /packages/:id/subtasks` 与 `PATCH/DELETE /packages/:id/subtasks/:subtaskId`。
+- P3 Agent 工具：`work.list_package_subtasks`（只读）、`work.add_package_subtask`/`work.update_package_subtask`（风险 2 + 确认策略 always → AI 只能生成 R3 提案，不直接改子任务状态）。
+- P3 网页：任务卡新增子任务面板（折叠清单、勾选/重开/删除/新增、显示 done/total 与完成人/证据）；存在未完成子任务时“提交验收”按钮前置禁用并提示剩余项；提供“让 Agent 起草勾选建议”快捷预填；globals.css 配套样式。
+- P3 测试与验证：单测新增 6 个场景（双方可拆且旁观者拒绝、完成/重开与证据门禁、in_review 锁定、workspace 进度暴露、Agent 工具注册与确认策略、schema 证据格式）；Postgres 集成测试覆盖落库、CAS 冲突、进度聚合与锁定期；本地开发库应用 0048 后 workspace 接口恢复 200。
 
 ## Pending
 
-- P3/P4/P5 不在本批 MVP-FIX 交付范围：子任务模型（work_package_tasks + 事件类型扩展 + AI 勾选建议）、通知链路（分派/交接/验收主动通知与提醒脚本常驻调度）、体验细节（文案人话化、空态引导、流式/阶段提示、一键重试）按产品后续排期与文档第六节建议推进，本任务不替代产品决策。
-- 浏览器端视觉验收（表格视图、身份切换器、发布任务/验收/修正草稿对话框、时间线移动端布局）仍需可用浏览器环境；本机未安装浏览器驱动，已在 Verification 中如实标注。
+- P3（后续）/P4/P5 不在本批 MVP-FIX 交付范围：子任务证据附件上传（决策点 6 补件）、通知链路（分派/交接/验收主动通知与提醒脚本常驻调度）、体验细节（文案人话化、空态引导、流式/阶段提示、一键重试）按产品后续排期与文档第六节建议推进，本任务不替代产品决策。
+- 浏览器端视觉验收（表格视图、身份切换器、发布任务/验收/修正草稿对话框、子任务面板、时间线移动端布局）仍需可用浏览器环境；本机未安装浏览器驱动，已在 Verification 中如实标注。
 
 ## Next step
 
-P01 复核 MVP-FIX 的 P0/P1 快照与 P2 双通道交付（提交验收/验收通过退回/发起交接/发布任务 + 表单发布入口 + 可编辑提案预览卡）并决定合并；P3–P5 由产品按排期另行立项。
+P01 复核 MVP-FIX 的 P0/P1 快照、P2 双通道交付（提交验收/验收通过退回/发起交接/发布任务 + 表单发布入口 + 可编辑提案预览卡）与 P3 子任务拆分/勾选（全部按推荐决策执行）并决定合并；P3 证据附件与 P4/P5 由产品按排期另行立项。
 
 ## Verification
 
 - [x] `npm run typecheck`：exit 0。
 - [x] `npm run lint`：exit 0（零警告）。
-- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（518 passed / 26 skipped）。
+- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（526 passed / 26 skipped）。
 - [x] P0 导出过滤单测、P1 身份切换集成测试、P2 验收流转单测（review_decision 边界 + reviewNote 事件审计）、P2 amend/supersede 单元与集成测试：通过。
-- [x] `node .ai-team/check.mjs`：Result: valid（functional 12/13，唯一未勾为 P3–P5 排期项）。
+- [x] P3 单测（双方可拆且旁观者拒绝、完成/重开与证据门禁、in_review 锁定、workspace 进度暴露、Agent 工具注册与 R3 确认策略、schema 证据格式）与 Postgres 集成测试（落库、CAS 冲突、进度聚合、锁定期）：通过。
+- [x] `node .ai-team/check.mjs`：Result: valid（functional 13/14，唯一未勾为 P3 后续证据附件与 P4/P5 排期项）。
 - [x] Next 生产构建 `npm run build`：exit 0。
-- [ ] 浏览器端视觉验收（表格视图/身份切换器/发布任务/验收/修正草稿对话框/时间线移动端）：待有浏览器驱动的环境复核。
+- [ ] 浏览器端视觉验收（表格视图/身份切换器/发布任务/验收/修正草稿对话框/子任务面板/时间线移动端）：待有浏览器驱动的环境复核。
 
 ## Handoff note
 
 - From: `MVP-FIX`
 - To: `P01`
-- Summary: P0（任务表+进度表视图、单一 /board 数据源、筛选导出口径一致）、P1（开发身份选人登录、按人隔离验证、生产失败关闭）、P2（提交验收/验收通过退回双通道 + reviewNote 审计边界、发起交接直连/可编辑预览、发布任务表单入口 + AI 通道、R3 提案 amend/supersede 服务端与网页可编辑预览卡）已完成：typecheck、零警告 lint、全量 518 测试与生产构建通过，`.ai-team/TASK.md` functional 12/13，唯一未勾为按产品排期的 P3–P5 项；浏览器视觉验收待有驱动的环境复核。分支 `codex/pr5-task-iter` 自基线共 6 个提交（3ff66cc/109b755/be50da1/221ae2f/fe19e26/5e34451），工作树 clean。
+- Summary: P0（任务表+进度表视图、单一 /board 数据源、筛选导出口径一致）、P1（开发身份选人登录、按人隔离验证、生产失败关闭）、P2（提交验收/验收通过退回双通道 + reviewNote 审计边界、发起交接直连/可编辑预览、发布任务表单入口 + AI 通道、R3 提案 amend/supersede 服务端与网页可编辑预览卡）、P3 第一批（任务包子任务拆分/勾选/重开/删除、进度 done/total、全部完成后才可 in_review、in_review 后清单锁定、AI 只起草勾选建议经 R3 确认）已完成：typecheck、零警告 lint、全量 526 测试与生产构建通过，`.ai-team/TASK.md` functional 13/14，唯一未勾为 P3 证据附件与 P4/P5 排期项；浏览器视觉验收待有驱动的环境复核。分支 `codex/pr5-task-iter` 下一批新增/改动文件按 P3 里程碑提交（含迁移 0048、HTTP 路由、Agent 工具、任务卡子任务面板与文档）。

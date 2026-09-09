@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { appendPoolFeedbackSchema, createTaskTemplateSchema, initiateTaskHandoffSchema, publishMissionSchema, publishPoolMessageSchema, respondToTaskHandoffSchema, taskHandoffTrailSchema, transitionPackageSchema, updateTaskTemplateSchema } from "@/src/modules/task-command/application/schemas";
+import { addPackageSubtaskSchema, appendPoolFeedbackSchema, createTaskTemplateSchema, initiateTaskHandoffSchema, listPackageSubtasksSchema, publishMissionSchema, publishPoolMessageSchema, respondToTaskHandoffSchema, taskHandoffTrailSchema, transitionPackageSchema, updatePackageSubtaskSchema, updateTaskTemplateSchema } from "@/src/modules/task-command/application/schemas";
 import type { TaskCommandService } from "@/src/modules/task-command/application/service";
 import { ToolRegistry } from "@/src/modules/agent/domain/tool";
 
@@ -186,6 +186,43 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
     inputSchema: z.object({ projectId: z.uuid() }).strict(),
     preview(input) { const value = z.object({ projectId: z.uuid() }).parse(input); return `盘点项目 ${value.projectId} 的可见任务。`; },
     execute(context, input) { return service.projectTaskInventory(context, z.object({ projectId: z.uuid() }).strict().parse(input)); },
+  });
+  registry.register({
+    id: "work.list_package_subtasks", skillId: "work-orchestration", version: 1,
+    description: "只读列出任务包已拆分出的子任务（含各自完成状态与证据引用）和进度（done/total）。回答任务完成进度、还剩哪些子步骤、能否提交验收前应先核验本工具与 work.get_task_progress，不要猜测。",
+    requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { packageId: { type: "string", format: "uuid" } }, required: ["packageId"] },
+    inputSchema: listPackageSubtasksSchema,
+    preview(input) { const value = listPackageSubtasksSchema.parse(input); return `列出任务包 ${value.packageId} 的子任务与进度。`; },
+    execute(context, input) { return service.listPackageSubtasks(context, listPackageSubtasksSchema.parse(input)); },
+  });
+  registry.register({
+    id: "work.add_package_subtask", skillId: "work-orchestration", version: 1,
+    description: "为一个任务包新增一条待办子任务（任务拆分）。发布人、承接人和管理员都可以拆；AI 只负责起草拆分内容，本工具生成待人工确认的提案，确认后才落库。任务已进入验收（in_review）或已完成后不能再拆。",
+    requiredPermissions: ["work_task:update"], riskLevel: 2, confirmationPolicy: "always", sideEffect: "internal_idempotent", timeoutMs: 15_000, maxAttempts: 3,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: {
+      packageId: { type: "string", format: "uuid" }, title: { type: "string", minLength: 2, maxLength: 160 },
+      note: { type: "string", description: "可选完成说明" }, evidenceRefs: { type: "array", items: { type: "string", description: "http(s) 链接或 类型:引用" }, maxItems: 20 },
+    }, required: ["packageId", "title"] },
+    inputSchema: addPackageSubtaskSchema,
+    preview(input) { const value = addPackageSubtaskSchema.parse(input); return `为任务包 ${value.packageId} 新增子任务“${value.title}”。`; },
+    execute(context, input) { return service.addPackageSubtask(context, addPackageSubtaskSchema.parse(input)); },
+  });
+  registry.register({
+    id: "work.update_package_subtask", skillId: "work-orchestration", version: 1,
+    description: "勾选（done=true，附可核验证据引用）或重新打开（done=false）任务包的一条子任务。AI 只起草勾选建议——本工具生成待人工确认的提案，确认后才改变子任务状态；完成后会返回任务包最新进度（done/total）。任务已进入验收或已完成后不能再改动子任务。",
+    requiredPermissions: ["work_task:update"], riskLevel: 2, confirmationPolicy: "always", sideEffect: "internal_idempotent", timeoutMs: 15_000, maxAttempts: 3,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: {
+      packageId: { type: "string", format: "uuid" }, subtaskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 },
+      done: { type: "boolean", description: "true=标为完成；false=重新打开" },
+      note: { type: "string", description: "可选完成说明" }, evidenceRefs: { type: "array", items: { type: "string", description: "http(s) 链接或 类型:引用" }, maxItems: 20 },
+    }, required: ["packageId", "subtaskId", "expectedVersion", "done"] },
+    inputSchema: updatePackageSubtaskSchema,
+    preview(input) { const value = updatePackageSubtaskSchema.parse(input); return `${value.done ? "勾选完成" : "重新打开"}任务包 ${value.packageId} 的子任务 ${value.subtaskId}。`; },
+    execute(context, input) { return service.updatePackageSubtask(context, updatePackageSubtaskSchema.parse(input)); },
   });
   registry.register({
     id: "communication.publish_message", skillId: "company-communication", version: 1,

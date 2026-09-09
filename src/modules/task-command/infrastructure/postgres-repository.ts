@@ -1,5 +1,5 @@
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
-import type { WorkArtifact, WorkArtifactVersion, WorkConversation, WorkConversationMessage, WorkMessageEvent, WorkMission, WorkOrgUnit, WorkPackage, WorkPerson, WorkPoolFeedback, WorkPoolMessage, WorkTaskEvent, WorkTaskHandoff } from "@/src/modules/task-command/domain/task-command";
+import type { WorkArtifact, WorkArtifactVersion, WorkConversation, WorkConversationMessage, WorkMessageEvent, WorkMission, WorkOrgUnit, WorkPackage, WorkPackageSubtask, WorkPerson, WorkPoolFeedback, WorkPoolMessage, WorkTaskEvent, WorkTaskHandoff } from "@/src/modules/task-command/domain/task-command";
 import type { DatabaseExecutor, TransactionalDatabase } from "@/src/platform/database/executor";
 
 type Row = Record<string, unknown>;
@@ -32,6 +32,12 @@ const mapPackage = (row: Row): WorkPackage => ({
 const mapEvent = (row: Row): WorkTaskEvent => ({
   sequence: Number(row.sequence), id: text(row.id), tenantId: text(row.tenant_id), missionId: text(row.mission_id), packageId: optionalText(row.package_id),
   eventType: row.event_type as WorkTaskEvent["eventType"], actorId: text(row.actor_id), audience: row.audience as WorkTaskEvent["audience"], payload: json<Record<string, unknown>>(row.payload), occurredAt: text(row.occurred_at),
+});
+const mapSubtask = (row: Row): WorkPackageSubtask => ({
+  id: text(row.id), tenantId: text(row.tenant_id), missionId: text(row.mission_id), packageId: text(row.package_id), title: text(row.title),
+  status: row.status as WorkPackageSubtask["status"], sortOrder: Number(row.sort_order), doneBy: optionalText(row.done_by), doneAt: optionalText(row.done_at),
+  doneNote: optionalText(row.done_note), evidenceRefs: json<string[]>(row.evidence_refs ?? []), createdBy: text(row.created_by),
+  createdAt: text(row.created_at), updatedAt: text(row.updated_at), version: Number(row.version),
 });
 const mapHandoff = (row: Row): WorkTaskHandoff => ({
   id: text(row.id), tenantId: text(row.tenant_id), packageId: text(row.package_id), missionId: text(row.mission_id), fromAssigneeId: text(row.from_assignee_id), toAssigneeId: text(row.to_assignee_id),
@@ -114,6 +120,52 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
   async listMissions(tenantId: string) { return this.database.withTenant(tenantId, async (db) => (await db.query("SELECT * FROM work_missions WHERE tenant_id=$1 ORDER BY created_at DESC,id", [tenantId])).map(mapMission)); }
   async listPackages(tenantId: string) { return this.database.withTenant(tenantId, async (db) => (await db.query("SELECT * FROM work_packages WHERE tenant_id=$1 ORDER BY updated_at DESC,id", [tenantId])).map(mapPackage)); }
   async getPackage(tenantId: string, id: string) { return this.database.withTenant(tenantId, async (db) => { const rows = await db.query("SELECT * FROM work_packages WHERE tenant_id=$1 AND id=$2", [tenantId,id]); return rows[0] ? mapPackage(rows[0]) : null; }); }
+
+  async listPackageSubtasks(tenantId: string, packageId: string) {
+    return this.database.withTenant(tenantId, async (db) => (await db.query(
+      "SELECT * FROM work_package_tasks WHERE tenant_id=$1 AND package_id=$2 ORDER BY sort_order,created_at,id", [tenantId,packageId],
+    )).map(mapSubtask));
+  }
+
+  async listPackageSubtaskProgress(tenantId: string, packageIds: string[]) {
+    if (!packageIds.length) return [];
+    return this.database.withTenant(tenantId, async (db) => (await db.query(
+      `SELECT package_id::text, count(*) FILTER (WHERE status='done')::int AS done, count(*)::int AS total
+       FROM work_package_tasks WHERE tenant_id=$1 AND package_id = ANY($2::uuid[])
+       GROUP BY package_id`, [tenantId,packageIds],
+    )).map((row) => ({ packageId: text(row.package_id), done: Number(row.done), total: Number(row.total) })));
+  }
+
+  async savePackageSubtask(subtask: WorkPackageSubtask, event: Omit<WorkTaskEvent, "sequence">) {
+    return this.database.withTenant(subtask.tenantId, async (db) => {
+      const rows = await db.query(
+        `INSERT INTO work_package_tasks(id,tenant_id,mission_id,package_id,title,status,sort_order,done_by,done_at,done_note,evidence_refs,created_by,created_at,updated_at,version)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,status=EXCLUDED.status,done_by=EXCLUDED.done_by,done_at=EXCLUDED.done_at,done_note=EXCLUDED.done_note,
+           evidence_refs=EXCLUDED.evidence_refs,updated_at=EXCLUDED.updated_at,version=EXCLUDED.version
+           WHERE work_package_tasks.tenant_id=$2 AND work_package_tasks.version=$16
+         RETURNING id`,
+        [subtask.id,subtask.tenantId,subtask.missionId,subtask.packageId,subtask.title,subtask.status,subtask.sortOrder,
+          subtask.doneBy ?? null,subtask.doneAt ?? null,subtask.doneNote ?? null,subtask.evidenceRefs,subtask.createdBy,
+          subtask.createdAt,subtask.updatedAt,subtask.version,subtask.version - 1],
+      );
+      if (rows.length !== 1) return false;
+      await this.insertEvent(db, event);
+      return true;
+    });
+  }
+
+  async deletePackageSubtask(tenantId: string, packageId: string, subtaskId: string, expectedVersion: number, event: Omit<WorkTaskEvent, "sequence">) {
+    return this.database.withTenant(tenantId, async (db) => {
+      const rows = await db.query(
+        "DELETE FROM work_package_tasks WHERE tenant_id=$1 AND package_id=$2 AND id=$3 AND version=$4 RETURNING id",
+        [tenantId,packageId,subtaskId,expectedVersion],
+      );
+      if (rows.length !== 1) return false;
+      await this.insertEvent(db, event);
+      return true;
+    });
+  }
 
   async publishMission(mission: WorkMission, packages: WorkPackage[], events: Omit<WorkTaskEvent, "sequence">[]) {
     return this.database.withTenant(mission.tenantId, async (db) => {

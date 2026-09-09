@@ -1,7 +1,7 @@
 // Requirements: PR-009, PR-010, PR-012, MR-046, MR-047, MR-048, MR-049, MR-050, AR-011, SR-007, AC-012, AC-013
 import { describe, expect, it } from "vitest";
 import { TaskCommandService } from "@/src/modules/task-command/application/service";
-import { transitionPackageSchema } from "@/src/modules/task-command/application/schemas";
+import { addPackageSubtaskSchema, transitionPackageSchema, updatePackageSubtaskSchema } from "@/src/modules/task-command/application/schemas";
 import { DEMO_DELIVERY_OWNER_ID, DEMO_OPERATIONS_OWNER_ID, DEMO_PRODUCT_ORG_ID, DEMO_PRODUCT_OWNER_ID, InMemoryTaskCommandRepository } from "@/src/modules/task-command/infrastructure/in-memory-repository";
 import { createDevelopmentRequestContext, DEMO_MANAGER_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
 import { createMissionBundle, createTaskTemplateBundle } from "@/src/modules/task-command/domain/task-command";
@@ -339,6 +339,108 @@ describe("real-time task command domain", () => {
     expect(board.tasks.length).toBeGreaterThanOrEqual(2);
     expect(board.tasks.some(({ title }) => title === "看板模板")).toBe(false);
     expect(board.tasks.every(({ dueState }) => ["overdue", "due_soon", "normal", "done"].includes(dueState ?? "normal"))).toBe(true);
+  });
+});
+
+describe("P3 package subtasks: split, check off and the all-done review gate", () => {
+  async function subtaskFixture() {
+    const { service, publisher, conversation } = await fixture();
+    const task = (await service.publishMission(publisher, {
+      ...missionInput(conversation.id),
+      packages: [{ title: "验收证据拆分", description: "拆分验收证据整理步骤。", acceptanceCriteria: "全部子步骤完成。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_PRODUCT_OWNER_ID, startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 3, priority: "high" as const, dueAt: "2030-08-10T10:00:00.000Z", capacityPoints: 1 }],
+    })).packages[0];
+    const owner = { ...createDevelopmentRequestContext("subtask-owner"), actorId: DEMO_PRODUCT_OWNER_ID };
+    return { service, publisher, conversation, task, owner };
+  }
+
+  it("assignee and publisher can both split a package into subtasks; outsiders are denied", async () => {
+    const { service, publisher, conversation, task, owner } = await subtaskFixture();
+    await expect(service.addPackageSubtask(owner, { packageId: task.id, title: "整理功能清单" })).resolves.toMatchObject({ subtask: { status: "pending", sortOrder: 1, createdBy: owner.actorId } });
+    await expect(service.addPackageSubtask(publisher, { packageId: task.id, title: "汇总测试报告", note: "含自动化结果" })).resolves.toMatchObject({ subtask: { status: "pending", sortOrder: 2 } });
+    const outsider = createDevelopmentRequestContext("subtask-outsider", "operations");
+    await expect(service.addPackageSubtask(outsider, { packageId: task.id, title: "不应被创建" })).rejects.toThrow("POLICY_DENIED:work_task:ownership");
+    const listed = await service.listPackageSubtasks(owner, { packageId: task.id });
+    expect(listed.subtasks.map(({ title }) => title)).toEqual(["整理功能清单", "汇总测试报告"]);
+    expect(listed.progress).toEqual({ done: 0, total: 2 });
+    const subtaskEvents = (await service.events(publisher, 0, 100)).filter((item) => item.eventType === "package_progress_updated");
+    expect(subtaskEvents.map(({ payload }) => payload.action)).toEqual(["subtask_created", "subtask_created"]);
+    expect(subtaskEvents[0].payload.subtaskId).toBe(listed.subtasks[0].id);
+    void conversation;
+  });
+
+  it("completing and reopening subtasks carries note and gated evidence; review needs all done", async () => {
+    const { service, task, owner } = await subtaskFixture();
+    await service.transitionPackage(owner, task.id, { expectedVersion: 1, nextStatus: "in_progress" });
+    const created = await service.addPackageSubtask(owner, { packageId: task.id, title: "执行回归测试" });
+    await service.addPackageSubtask(owner, { packageId: task.id, title: "归档验收证据" });
+    // 未全部完成时禁止进入验收
+    await expect(service.transitionPackage(owner, task.id, { expectedVersion: 2, nextStatus: "in_review", evidenceRefs: ["document:summary"] })).rejects.toThrow("WORK_PACKAGE_SUBTASKS_PENDING:0/2");
+    const completed = await service.updatePackageSubtask(owner, {
+      packageId: task.id, subtaskId: created.subtask.id, expectedVersion: created.subtask.version, done: true,
+      note: "回归 32 条全部通过", evidenceRefs: ["document:regression-32"],
+    });
+    expect(completed.subtask).toMatchObject({ status: "done", doneBy: owner.actorId, doneNote: "回归 32 条全部通过", evidenceRefs: ["document:regression-32"] });
+    expect(completed.progress).toEqual({ done: 1, total: 2 });
+    // 重新打开：状态回待办且清除完成字段
+    const reopened = await service.updatePackageSubtask(owner, { packageId: task.id, subtaskId: created.subtask.id, expectedVersion: completed.subtask.version, done: false });
+    expect(reopened.subtask).toMatchObject({ status: "pending" });
+    expect(reopened.subtask.doneBy).toBeUndefined();
+    // 证据格式门禁同样作用于子任务完成说明
+    expect(updatePackageSubtaskSchema.safeParse({ packageId: task.id, subtaskId: created.subtask.id, expectedVersion: 1, done: true, evidenceRefs: ["已完成"] }).success).toBe(false);
+    expect(updatePackageSubtaskSchema.safeParse({ packageId: task.id, subtaskId: created.subtask.id, expectedVersion: 1, done: true, evidenceRefs: ["https://example.test/evidence.pdf"] }).success).toBe(true);
+    // 全部完成后才能进验收
+    const reDone = await service.updatePackageSubtask(owner, { packageId: task.id, subtaskId: created.subtask.id, expectedVersion: reopened.subtask.version, done: true, evidenceRefs: ["minutes:retro:2026-w32"] });
+    const second = (await service.listPackageSubtasks(owner, { packageId: task.id })).subtasks.find((item) => item.title === "归档验收证据")!;
+    await service.updatePackageSubtask(owner, { packageId: task.id, subtaskId: second.id, expectedVersion: second.version, done: true });
+    const submitted = await service.transitionPackage(owner, task.id, { expectedVersion: 2, nextStatus: "in_review", evidenceRefs: ["document:summary"] });
+    expect(submitted.status).toBe("in_review");
+    void reDone;
+  });
+
+  it("locks subtask changes once the package is in review or done, and emits progress events", async () => {
+    const { service, task, owner } = await subtaskFixture();
+    await service.transitionPackage(owner, task.id, { expectedVersion: 1, nextStatus: "in_progress" });
+    const created = await service.addPackageSubtask(owner, { packageId: task.id, title: "整理签字页" });
+    await service.updatePackageSubtask(owner, { packageId: task.id, subtaskId: created.subtask.id, expectedVersion: created.subtask.version, done: true, evidenceRefs: ["document:sign-page"] });
+    const submitted = await service.transitionPackage(owner, task.id, { expectedVersion: 2, nextStatus: "in_review", evidenceRefs: ["document:summary"] });
+    await expect(service.addPackageSubtask(owner, { packageId: task.id, title: "验收后追加" })).rejects.toThrow("WORK_PACKAGE_SUBTASKS_LOCKED");
+    await expect(service.updatePackageSubtask(owner, { packageId: task.id, subtaskId: created.subtask.id, expectedVersion: 2, done: false })).rejects.toThrow("WORK_PACKAGE_SUBTASKS_LOCKED");
+    await expect(service.deletePackageSubtask(owner, { packageId: task.id, subtaskId: created.subtask.id, expectedVersion: submitted.version })).rejects.toThrow("WORK_PACKAGE_SUBTASKS_LOCKED");
+    const events = (await service.events(owner, 0, 100)).filter((item) => item.packageId === task.id && item.eventType === "package_progress_updated");
+    expect(events.map(({ payload }) => payload.action)).toEqual(["subtask_created", "subtask_completed"]);
+  });
+
+  it("workspace lists expose done/total progress for packages with subtasks", async () => {
+    const { service, publisher, conversation, task, owner } = await subtaskFixture();
+    void conversation;
+    const a = await service.addPackageSubtask(owner, { packageId: task.id, title: "准备素材" });
+    await service.addPackageSubtask(owner, { packageId: task.id, title: "整理证据链" });
+    await service.updatePackageSubtask(owner, { packageId: task.id, subtaskId: a.subtask.id, expectedVersion: a.subtask.version, done: true, evidenceRefs: ["https://example.test/a.pdf"] });
+    const myTask = (await service.workspace(owner)).myTasks.find(({ id }) => id === task.id) as { progress?: { done: number; total: number } } | undefined;
+    expect(myTask?.progress).toEqual({ done: 1, total: 2 });
+    const published = (await service.workspace(publisher)).publishedByMe.find(({ id }) => id === task.id) as { progress?: { done: number; total: number } } | undefined;
+    expect(published?.progress).toEqual({ done: 1, total: 2 });
+  });
+
+  it("registers subtask Agent tools: read-only list plus R3 proposal-gated add/update", async () => {
+    const { service, publisher, conversation, task } = await subtaskFixture();
+    void conversation;
+    await service.addPackageSubtask(publisher, { packageId: task.id, title: "核验输入" });
+    const tools = new ToolRegistry();
+    registerTaskCommandTools(tools, service);
+    const listTool = tools.available(publisher).find((item) => item.id === "work.list_package_subtasks");
+    const addTool = tools.available(publisher).find((item) => item.id === "work.add_package_subtask");
+    const updateTool = tools.available(publisher).find((item) => item.id === "work.update_package_subtask");
+    expect(listTool).toBeDefined();
+    expect(addTool).toBeDefined();
+    expect(updateTool).toBeDefined();
+    expect(addTool).toMatchObject({ confirmationPolicy: "always", riskLevel: 2 });
+    expect(updateTool).toMatchObject({ confirmationPolicy: "always", riskLevel: 2 });
+    const listed = await listTool!.execute(publisher, { packageId: task.id });
+    expect((listed as { subtasks: unknown[] }).subtasks).toHaveLength(1);
+    // AI 通道同样是“起草→人工确认”：execute 直接落库的入口不应存在——add/update 均为 always 确认，
+    // 调用方不会让 AI 直接写状态；这里仅验证 schema 解析与只读查询可用。
+    expect(addPackageSubtaskSchema.parse({ packageId: task.id, title: "草案" })).toMatchObject({ title: "草案" });
   });
 });
 

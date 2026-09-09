@@ -91,6 +91,37 @@ export const transitionPackageSchema = z.object({
   reviewNote: z.string().trim().min(4).max(500).optional(),
 }).strict();
 
+export const listPackageSubtasksSchema = z.object({ packageId: z.uuid() }).strict();
+
+export const addPackageSubtaskSchema = z.object({
+  packageId: z.uuid(),
+  title: z.string().trim().min(2).max(160),
+  /** 可选完成说明与证据引用（http 链接或“类型:引用”），建立时可为空。 */
+  note: z.string().trim().min(2).max(800).optional(),
+  evidenceRefs,
+}).strict();
+
+export const updatePackageSubtaskSchema = z.object({
+  packageId: z.uuid(),
+  subtaskId: z.uuid(),
+  expectedVersion: z.number().int().positive(),
+  /** true=标为完成；false=重新打开为待办 */
+  done: z.boolean(),
+  note: z.string().trim().min(2).max(800).optional(),
+  evidenceRefs,
+}).strict();
+
+export const deletePackageSubtaskSchema = z.object({
+  packageId: z.uuid(),
+  subtaskId: z.uuid(),
+  expectedVersion: z.number().int().positive(),
+}).strict();
+
+export type ListPackageSubtasksInput = z.infer<typeof listPackageSubtasksSchema>;
+export type AddPackageSubtaskInput = z.infer<typeof addPackageSubtaskSchema>;
+export type UpdatePackageSubtaskInput = z.infer<typeof updatePackageSubtaskSchema>;
+export type DeletePackageSubtaskInput = z.infer<typeof deletePackageSubtaskSchema>;
+
 export const initiateTaskHandoffSchema = z.object({
   taskId: z.uuid(),
   expectedVersion: z.number().int().positive(),

@@ -102,13 +102,100 @@ export type WorkPackage = {
   updatedAt: string;
 };
 
+/**
+ * P3：任务包下的可勾选子任务（拆分清单）。
+ * 二态 pending/done + 可选完成说明与证据引用；谁都能拆，但每条都记录添加人与操作时间。
+ * 勾选/拆分写包时以 expectedVersion CAS 防并发覆盖。
+ */
+export type WorkPackageSubtaskStatus = "pending" | "done";
+export type WorkPackageSubtask = {
+  id: string;
+  tenantId: string;
+  missionId: string;
+  packageId: string;
+  title: string;
+  status: WorkPackageSubtaskStatus;
+  sortOrder: number;
+  doneBy?: string;
+  doneAt?: string;
+  doneNote?: string;
+  evidenceRefs: string[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+};
+
+export type WorkPackageProgress = { done: number; total: number };
+
+export function progressOfSubtasks(subtasks: WorkPackageSubtask[]): WorkPackageProgress {
+  return { done: subtasks.filter((item) => item.status === "done").length, total: subtasks.length };
+}
+
+/** P3 决策 4：in_review/completed/cancelled 后禁止新增或删除子任务，退回(in_progress)后才可再拆。 */
+export function canMutatePackageSubtasks(packageStatus: WorkPackageStatus): boolean {
+  return !["in_review", "completed", "cancelled"].includes(packageStatus);
+}
+
+export function allSubtasksDone(subtasks: WorkPackageSubtask[]): boolean {
+  return subtasks.length > 0 && subtasks.every((item) => item.status === "done");
+}
+
+export function createWorkPackageSubtask(input: {
+  tenantId: string;
+  missionId: string;
+  packageId: string;
+  title: string;
+  sortOrder: number;
+  createdBy: string;
+}, now = new Date()): WorkPackageSubtask {
+  const timestamp = now.toISOString();
+  const title = input.title.trim();
+  if (title.length < 2) throw new Error("WORK_SUBTASK_TITLE_REQUIRED");
+  return {
+    id: randomUUID(), tenantId: input.tenantId, missionId: input.missionId, packageId: input.packageId,
+    title, status: "pending", sortOrder: input.sortOrder, evidenceRefs: [], createdBy: input.createdBy,
+    createdAt: timestamp, updatedAt: timestamp, version: 1,
+  };
+}
+
+export function completeWorkPackageSubtask(value: WorkPackageSubtask, input: { doneBy: string; note?: string; evidenceRefs?: string[] }, now = new Date()): WorkPackageSubtask {
+  if (value.status === "done") throw new Error("WORK_SUBTASK_ALREADY_DONE");
+  const timestamp = now.toISOString();
+  return {
+    ...value,
+    status: "done",
+    doneBy: input.doneBy,
+    doneAt: timestamp,
+    doneNote: input.note?.trim() || undefined,
+    evidenceRefs: [...new Set(input.evidenceRefs ?? [])],
+    version: value.version + 1,
+    updatedAt: timestamp,
+  };
+}
+
+export function reopenWorkPackageSubtask(value: WorkPackageSubtask, now = new Date()): WorkPackageSubtask {
+  if (value.status !== "done") throw new Error("WORK_SUBTASK_NOT_DONE");
+  const timestamp = now.toISOString();
+  return {
+    ...value,
+    status: "pending",
+    doneBy: undefined,
+    doneAt: undefined,
+    doneNote: undefined,
+    evidenceRefs: [],
+    version: value.version + 1,
+    updatedAt: timestamp,
+  };
+}
+
 export type WorkTaskEvent = {
   sequence: number;
   id: string;
   tenantId: string;
   missionId: string;
   packageId?: string;
-  eventType: "mission_published" | "package_published" | "package_claimed" | "package_status_changed" | "package_handoff_initiated" | "package_handoff_accepted" | "package_handoff_rejected";
+  eventType: "mission_published" | "package_published" | "package_claimed" | "package_status_changed" | "package_handoff_initiated" | "package_handoff_accepted" | "package_handoff_rejected" | "package_progress_updated";
   actorId: string;
   audience: "tenant" | "participants";
   payload: Record<string, unknown>;

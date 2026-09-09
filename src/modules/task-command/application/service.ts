@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { RequestContext } from "@/src/platform/context/request-context";
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
-import type { AppendPoolFeedbackInput, AppendTaskArtifactVersionInput, CreateTaskTemplateInput, ExportReportInput, GeneratePeriodicSummaryInput, InitiateTaskHandoffInput, PublishMissionInput, PublishPoolMessageInput, RegisterTaskArtifactInput, RespondToTaskHandoffInput, RunReminderScanInput, TransitionPackageInput, UpdateTaskTemplateInput } from "@/src/modules/task-command/application/schemas";
-import { claimWorkPackage, collectTaskReminderCandidates, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, deterministicUuid, dueStateOf, handoffWorkPackage, respondToTaskHandoff, revokeTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
+import type { AddPackageSubtaskInput, AppendPoolFeedbackInput, AppendTaskArtifactVersionInput, CreateTaskTemplateInput, DeletePackageSubtaskInput, ExportReportInput, GeneratePeriodicSummaryInput, InitiateTaskHandoffInput, ListPackageSubtasksInput, PublishMissionInput, PublishPoolMessageInput, RegisterTaskArtifactInput, RespondToTaskHandoffInput, RunReminderScanInput, TransitionPackageInput, UpdatePackageSubtaskInput, UpdateTaskTemplateInput } from "@/src/modules/task-command/application/schemas";
+import { canMutatePackageSubtasks, claimWorkPackage, collectTaskReminderCandidates, completeWorkPackageSubtask, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, createWorkPackageSubtask, deterministicUuid, dueStateOf, handoffWorkPackage, reopenWorkPackageSubtask, respondToTaskHandoff, revokeTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
 
 function hasPermission(context: RequestContext, permission: string): boolean {
   const [resource, action] = permission.split(":");
@@ -93,6 +93,12 @@ export class TaskCommandService {
     const visible = packages.filter((item) => item.publishedBy === context.actorId || item.assigneeId === context.actorId || canSeeClaim(item) || handoffParticipantPackageIds.has(item.id));
     const visiblePackageIds = new Set(visible.map(({ id }) => id));
     const visibleHandoffs = handoffs.filter((item) => visiblePackageIds.has(item.packageId));
+    const subtaskProgress = await this.repository.listPackageSubtaskProgress(context.tenantId, [...visiblePackageIds]);
+    const progressByPackage = new Map(subtaskProgress.map((item) => [item.packageId, { done: item.done, total: item.total }]));
+    const withDueAndProgress = (item: WorkPackage) => {
+      const progress = progressByPackage.get(item.id);
+      return progress ? { ...withDueState(item), progress } : withDueState(item);
+    };
     const messagePools = hasPermission(context, "message_pool:read")
       ? await this.messagePools(context, people, orgUnits)
       : [];
@@ -102,11 +108,11 @@ export class TaskCommandService {
       people,
       orgUnits,
       missions: missions.filter((mission) => visible.some((item) => item.missionId === mission.id)),
-      myTasks: visible.filter((item) => item.assigneeId === context.actorId && !item.isTemplate && !["completed", "cancelled"].includes(item.status)).map(withDueState),
-      availableTasks: visible.filter((item) => !item.isTemplate && item.assignmentMode === "open_claim" && item.status === "published" && !item.assigneeId).map(withDueState),
-      publishedByMe: visible.filter((item) => item.publishedBy === context.actorId).map(withDueState),
-      templates: visible.filter((item) => item.publishedBy === context.actorId && item.isTemplate).map(withDueState),
-      handoffTasks: visible.filter((item) => handoffParticipantPackageIds.has(item.id)).map(withDueState),
+      myTasks: visible.filter((item) => item.assigneeId === context.actorId && !item.isTemplate && !["completed", "cancelled"].includes(item.status)).map(withDueAndProgress),
+      availableTasks: visible.filter((item) => !item.isTemplate && item.assignmentMode === "open_claim" && item.status === "published" && !item.assigneeId).map(withDueAndProgress),
+      publishedByMe: visible.filter((item) => item.publishedBy === context.actorId).map(withDueAndProgress),
+      templates: visible.filter((item) => item.publishedBy === context.actorId && item.isTemplate).map(withDueAndProgress),
+      handoffTasks: visible.filter((item) => handoffParticipantPackageIds.has(item.id)).map(withDueAndProgress),
       handoffs: visibleHandoffs,
       pendingHandoffs: visibleHandoffs.filter((item) => item.status === "pending" && (item.toAssigneeId === context.actorId || item.fromAssigneeId === context.actorId)).flatMap((handoff) => {
         const task = visible.find((item) => item.id === handoff.packageId);
@@ -357,6 +363,13 @@ export class TaskCommandService {
     const canManage = current.assigneeId === context.actorId || current.publishedBy === context.actorId || hasPermission(context, "work_task:admin");
     if (!canManage) throw new Error("POLICY_DENIED:work_task:ownership");
     if (current.version !== input.expectedVersion) throw new Error("WORK_PACKAGE_VERSION_CONFLICT");
+    if (input.nextStatus === "in_review" && current.status === "in_progress") {
+      const subtasks = await this.repository.listPackageSubtasks(context.tenantId, id);
+      if (subtasks.length > 0 && !subtasks.every((item) => item.status === "done")) {
+        const done = subtasks.filter((item) => item.status === "done").length;
+        throw new Error(`WORK_PACKAGE_SUBTASKS_PENDING:${done}/${subtasks.length}`);
+      }
+    }
     // P2 产品边界：验收通过/退回是发布人（管理者）的决定，不是执行人的自助操作；
     // 从 in_review 离开到 completed/in_progress 只允许发布人或管理员，AI 仅能起草意见、不能代为通过/退回。
     if (current.status === "in_review" && ["completed", "in_progress"].includes(input.nextStatus)) {
@@ -375,6 +388,84 @@ export class TaskCommandService {
     const changed = await this.repository.transitionPackage({ current, next, expectedVersion: input.expectedVersion, event: event({ tenantId: context.tenantId, missionId: current.missionId, packageId: current.id, eventType: "package_status_changed", actorId: context.actorId, audience: "participants", payload: eventPayload }) });
     if (!changed) throw new Error("WORK_PACKAGE_VERSION_CONFLICT");
     return next;
+  }
+
+  /** P3：列出任务包子任务（只读，随服务端可见性过滤）。 */
+  async listPackageSubtasks(context: RequestContext, input: ListPackageSubtasksInput) {
+    requirePermission(context, "work_task:read");
+    const current = await this.requirePackage(context.tenantId, input.packageId);
+    if (!(await this.isTaskVisible(context, current))) throw new Error("WORK_TASK_NOT_VISIBLE");
+    const items = await this.repository.listPackageSubtasks(context.tenantId, input.packageId);
+    const done = items.filter((item) => item.status === "done").length;
+    return { packageId: input.packageId, subtasks: items, progress: { done, total: items.length } };
+  }
+
+  /** P3：谁都能拆子任务（发布人或承接人/管理员），但每条记录添加人；in_review/completed/cancelled 后禁止新增。 */
+  async addPackageSubtask(context: RequestContext, input: AddPackageSubtaskInput) {
+    requirePermission(context, "work_task:update");
+    const current = await this.requirePackage(context.tenantId, input.packageId);
+    if (current.isTemplate) throw new Error("WORK_TEMPLATE_ONLY");
+    const canMutate = current.assigneeId === context.actorId || current.publishedBy === context.actorId || hasPermission(context, "work_task:admin");
+    if (!canMutate) throw new Error("POLICY_DENIED:work_task:ownership");
+    if (!canMutatePackageSubtasks(current.status)) throw new Error("WORK_PACKAGE_SUBTASKS_LOCKED");
+    const existing = await this.repository.listPackageSubtasks(context.tenantId, input.packageId);
+    const subtask = createWorkPackageSubtask({
+      tenantId: context.tenantId, missionId: current.missionId, packageId: current.id,
+      title: input.title, sortOrder: existing.length + 1, createdBy: context.actorId,
+    });
+    const changed = await this.repository.savePackageSubtask(subtask, event({
+      tenantId: context.tenantId, missionId: current.missionId, packageId: current.id,
+      eventType: "package_progress_updated", actorId: context.actorId, audience: "participants",
+      payload: { action: "subtask_created", subtaskId: subtask.id, title: subtask.title, sortOrder: subtask.sortOrder, done: false },
+    }));
+    if (!changed) throw new Error("WORK_PACKAGE_SUBTASK_CONFLICT");
+    return { subtask };
+  }
+
+  /** P3：勾选/重新打开子任务；勾选可带完成说明与证据引用（AI 只起草建议、本接口由人确认触发）。 */
+  async updatePackageSubtask(context: RequestContext, input: UpdatePackageSubtaskInput) {
+    requirePermission(context, "work_task:update");
+    const current = await this.requirePackage(context.tenantId, input.packageId);
+    if (current.isTemplate) throw new Error("WORK_TEMPLATE_ONLY");
+    const canMutate = current.assigneeId === context.actorId || current.publishedBy === context.actorId || hasPermission(context, "work_task:admin");
+    if (!canMutate) throw new Error("POLICY_DENIED:work_task:ownership");
+    if (!canMutatePackageSubtasks(current.status)) throw new Error("WORK_PACKAGE_SUBTASKS_LOCKED");
+    const items = await this.repository.listPackageSubtasks(context.tenantId, input.packageId);
+    const existing = items.find((item) => item.id === input.subtaskId);
+    if (!existing) throw new Error("WORK_PACKAGE_SUBTASK_NOT_FOUND");
+    if (existing.version !== input.expectedVersion) throw new Error("WORK_PACKAGE_SUBTASK_CONFLICT");
+    const next = input.done
+      ? completeWorkPackageSubtask(existing, { doneBy: context.actorId, note: input.note, evidenceRefs: input.evidenceRefs })
+      : reopenWorkPackageSubtask(existing);
+    const changed = await this.repository.savePackageSubtask(next, event({
+      tenantId: context.tenantId, missionId: current.missionId, packageId: current.id,
+      eventType: "package_progress_updated", actorId: context.actorId, audience: "participants",
+      payload: { action: input.done ? "subtask_completed" : "subtask_reopened", subtaskId: next.id, title: next.title, done: next.status === "done", note: next.doneNote, evidenceRefs: next.evidenceRefs },
+    }));
+    if (!changed) throw new Error("WORK_PACKAGE_SUBTASK_CONFLICT");
+    const remaining = items.map((item) => item.id === next.id ? next : item);
+    return { subtask: next, progress: { done: remaining.filter((item) => item.status === "done").length, total: remaining.length } };
+  }
+
+  /** P3：删除子任务（拆分人/发布人/管理员；in_review 后禁止）。 */
+  async deletePackageSubtask(context: RequestContext, input: DeletePackageSubtaskInput) {
+    requirePermission(context, "work_task:update");
+    const current = await this.requirePackage(context.tenantId, input.packageId);
+    if (current.isTemplate) throw new Error("WORK_TEMPLATE_ONLY");
+    const canMutate = current.assigneeId === context.actorId || current.publishedBy === context.actorId || hasPermission(context, "work_task:admin");
+    if (!canMutate) throw new Error("POLICY_DENIED:work_task:ownership");
+    if (!canMutatePackageSubtasks(current.status)) throw new Error("WORK_PACKAGE_SUBTASKS_LOCKED");
+    const items = await this.repository.listPackageSubtasks(context.tenantId, input.packageId);
+    const existing = items.find((item) => item.id === input.subtaskId);
+    if (!existing) throw new Error("WORK_PACKAGE_SUBTASK_NOT_FOUND");
+    const changed = await this.repository.deletePackageSubtask(context.tenantId, input.packageId, input.subtaskId, input.expectedVersion, event({
+      tenantId: context.tenantId, missionId: current.missionId, packageId: current.id,
+      eventType: "package_progress_updated", actorId: context.actorId, audience: "participants",
+      payload: { action: "subtask_deleted", subtaskId: existing.id, title: existing.title },
+    }));
+    if (!changed) throw new Error("WORK_PACKAGE_SUBTASK_CONFLICT");
+    const remaining = items.filter((item) => item.id !== input.subtaskId);
+    return { deletedSubtaskId: input.subtaskId, progress: { done: remaining.filter((item) => item.status === "done").length, total: remaining.length } };
   }
 
   async initiateTaskHandoff(context: RequestContext, input: InitiateTaskHandoffInput, execution?: { sourceRunId?: string; source?: "human" | "agent" }) {

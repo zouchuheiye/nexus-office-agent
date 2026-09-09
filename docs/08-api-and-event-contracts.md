@@ -59,6 +59,7 @@ type RequestContext = {
 /task-command/templates/:id
 /task-command/packages/:id/claim /task-command/packages/:id/transition /task-command/packages/:id/handoffs
 /task-command/packages/:id/timeline /task-command/handoffs/:id/response
+/task-command/packages/:id/subtasks /task-command/packages/:id/subtasks/:subtaskId
 /task-command/reports/export /task-command/events
 /auth/development-identities /auth/development-identities/switch
 /admin/policies /admin/audit /admin/models
@@ -69,6 +70,8 @@ type RequestContext = {
 开发/内网验证身份仅在本机开发或显式开启 `NEXUS_ALLOW_DEMO_IDENTITY` 时提供：`GET /auth/development-identities` 列出服务端定义的可选身份（不含权限明细），`POST /auth/development-identities/switch` 用 `key` 签发已签名会话 Cookie。关闭或未开启时二者分别返回 `403 DEMO_IDENTITY_DISABLED` 与 `503 DEMO_IDENTITY_SECRET_MISSING`，不会退化为任意扮演。
 
 任务推进 `POST /packages/:id/transition` 是验收闭环的唯一写通道，接受 `expectedVersion/nextStatus`，并按目标状态要求 `evidenceRefs`、`blockedReason` 或验收退回原因 `reviewNote`。从 `in_review` 离开时只有发布人或管理员能决定 `completed`（通过，payload 记 `decision=accept`）或退回 `in_progress`（payload 记 `decision=reject` 与 `reviewNote`，退回原因至少 4 字）；执行人不可自我验收，AI 只能起草意见、不能代为通过/退回。
+
+任务包子任务（P3）：`GET /packages/:id/subtasks` 只读列出子任务与进度 `{done,total}`；`POST /packages/:id/subtasks` 新增（发布人/承接人/管理员可拆，`title` 2–160 字，每条记 `createdBy`）；`PATCH /packages/:id/subtasks/:subtaskId` 勾选 `done=true`（可带完成说明 `note` 与可核验 `evidenceRefs`，证据格式同任务验收）或重新打开 `done=false`；`DELETE /packages/:id/subtasks/:subtaskId?expectedVersion=` 删除。三条写操作都要求子任务版本 CAS（冲突返回 `409 WORK_PACKAGE_SUBTASK_CONFLICT`），并把 `package_progress_updated` 事件（payload `action` 为 `subtask_created/subtask_completed/subtask_reopened/subtask_deleted`）追加进任务事件链。锁定期规则：任务进入 `in_review/completed/cancelled` 后禁止新增/勾选/删除子任务（`409 WORK_PACKAGE_SUBTASKS_LOCKED`），发布人退回 `in_progress` 后恢复；若任务已拆分且存在未完成子任务，`in_progress → in_review` 被拦截（`409 WORK_PACKAGE_SUBTASKS_PENDING:done/total`）。子任务写通道同样只对负责人/发布人开放，AI 经 `work.add_package_subtask`/`work.update_package_subtask` 只能生成 R3 待确认提案、不能直接改状态。
 
 R3 提案（可编辑预览卡）：`GET /agent/proposals/:id` 返回本人可见的提案结构（含工具输入）；`POST /agent/proposals/:id/amend`（`proposalHash + input`）把人修正后的输入重新解析为一份新提案，并把原提案作废为 `revoked`——R3 提案本身不可篡改，只有新提案可被确认执行。无实际变更返回 `409 PROPOSAL_AMEND_NO_CHANGE`，非本人或非 pending 提案无法 amend，版本漂移在 amend 时同样拦截。
 
@@ -134,7 +137,9 @@ type DomainEvent<T> = {
 - meeting.record_confirmed
 - integration.event_received / integration.sync_failed
 - agent.proposal_created / agent.action_executed
-- work.mission_published / work.package_published / work.package_claimed / work.package_status_changed
+- work.mission_published / work.package_published / work.package_claimed / work.package_status_changed / work.package_progress_updated
+
+子任务相关事件 `package_progress_updated` 的 payload：`action`（`subtask_created|subtask_completed|subtask_reopened|subtask_deleted`）、`subtaskId`、`title`，完成类动作带 `done/note/evidenceRefs`。工作区任务对象附带聚合后的 `progress:{done,total}`，与 `package_progress_updated` 事件一一对应。
 
 ## 5. 事件兼容
 

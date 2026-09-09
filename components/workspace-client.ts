@@ -8,6 +8,11 @@ export type WorkspaceTask = {
   assignmentMode: "direct" | "open_claim"; assigneeId?: string; targetOrgUnitId?: string; publishedBy: string; priority: "critical" | "high" | "medium" | "low";
   dueAt: string; startedAt?: string; estimatedDays?: number; dueState?: "overdue" | "due_soon" | "normal" | "done"; capacityPoints: number; status: "published" | "assigned" | "claimed" | "in_progress" | "blocked" | "in_review" | "completed" | "cancelled";
   evidenceRefs: string[]; blockedReason?: string; isTemplate: boolean; missingFields: string[]; version: number;
+  progress?: { done: number; total: number };
+};
+export type PackageSubtask = {
+  id: string; title: string; status: "pending" | "done"; sortOrder: number; doneBy?: string; doneAt?: string; doneNote?: string;
+  evidenceRefs: string[]; createdBy: string; createdAt: string; updatedAt: string; version: number;
 };
 export type PoolFeedback = { id: string; messageId: string; content: string; authorId: string; createdAt: string };
 export type PoolMessage = { id: string; poolKey: string; subject: string; content: string; kind: "announcement" | "notice"; authorId: string; createdAt: string; feedback: PoolFeedback[] };
