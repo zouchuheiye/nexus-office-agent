@@ -85,14 +85,15 @@ describe("development identity API", () => {
     const claims = verifySessionCookieValue(cookie, secret);
     expect(claims.actorId).toBe(DEMO_DELIVERY_OWNER_ID);
     expect(claims.sessionId).toBeTruthy();
-    expect(claims.permissions).toEqual(expect.arrayContaining(["work_task:claim"]));
-    expect(claims.permissions).not.toContain("work_task:admin");
+    // 会话 Cookie 只携带最小身份标识（避免超 4KB 浏览器限制被丢弃）；权限由服务端白名单重建。
+    expect(claims.permissions).toBeUndefined();
 
     const context = await resolveRequestContext(new Request("http://localhost", {
       headers: { cookie: `nexus_session=${encodeURIComponent(cookie)}`, "x-user-id": DEMO_MANAGER_ID },
     }));
-    expect(context.actorId).toBe(claims.actorId);
-    expect(context.permissions).toEqual(claims.permissions);
+    expect(context.actorId).toBe(DEMO_DELIVERY_OWNER_ID);
+    expect(context.permissions).toEqual(expect.arrayContaining(["work_task:claim"]));
+    expect(context.permissions).not.toContain("work_task:admin");
   });
 
   it("ignores a signed cookie from another tenant rather than impersonating its actor", async () => {
@@ -130,5 +131,24 @@ describe("development identity API", () => {
 
     const context = await resolveRequestContext(new Request("http://localhost", { headers: { cookie: `nexus_session=${encodeURIComponent(cookie)}` } }));
     expect(context.actorId).toBe(DEMO_DELIVERY_OWNER_ID);
+  });
+
+  it("keeps the highest-grant manager cookie small enough for browsers to overwrite stale identities", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("SESSION_SECRET", secret);
+    // 权限最大的“开发管理员”此前把完整权限集写进 Cookie，接近 5KB 超过浏览器 4KB 上限，
+    // 导致切换后新 Cookie 被静默丢弃、界面停留旧身份（如周然）。Cookie 现在只承载身份标识。
+    const response = await switchIdentity(jsonRequest({ key: "manager" }));
+    expect(response.status).toBe(200);
+    const cookie = sessionFromResponse(response);
+    expect(cookie.length).toBeLessThan(2_000);
+    const claims = verifySessionCookieValue(cookie, secret);
+    expect(claims.actorId).toBe(DEMO_MANAGER_ID);
+    expect(claims.permissions).toBeUndefined();
+    const context = await resolveRequestContext(new Request("http://localhost", {
+      headers: { cookie: `nexus_session=${encodeURIComponent(cookie)}` },
+    }));
+    expect(context.actorId).toBe(DEMO_MANAGER_ID);
+    expect(context.permissions).toContain("work_task:admin");
   });
 });

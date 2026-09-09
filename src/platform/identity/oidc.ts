@@ -160,7 +160,7 @@ export async function exchangeOidcCallback(input: { code: string; state: OidcSta
   const claims = await validateIdToken(tokens.id_token, input.state.nonce, input.config, discovery, fetcher, input.now ?? new Date());
   const mapping = input.config.subjectMappings[`${input.config.issuer}::${claims.sub}`];
   if (!mapping) throw new Error("OIDC_SUBJECT_NOT_PROVISIONED");
-  const session = createSessionCookieValue({ ...mapping, channel: "web", sessionId: randomUUID() }, input.config.sessionSecret, { now: input.now });
+  const session = createSessionCookieValue({ tenantId: mapping.tenantId, actorId: mapping.actorId, channel: "web", sessionId: randomUUID() }, input.config.sessionSecret, { now: input.now });
   return { session, returnTo: input.state.returnTo };
 }
 

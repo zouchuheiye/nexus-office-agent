@@ -1,10 +1,19 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import type { Channel, DataScope, RequestContext } from "@/src/platform/context/request-context";
+import type { Channel, DataScope } from "@/src/platform/context/request-context";
 
 export const SESSION_COOKIE_NAME = "nexus_session";
 const SESSION_VERSION = 1;
 
-export type SessionClaims = Omit<RequestContext, "traceId"> & {
+export type SessionClaims = {
+  tenantId: string;
+  actorId: string;
+  channel: Channel;
+  sessionId: string;
+  /** 授权的权威来源始终是服务端（开发白名单按 actorId 重建 / 生产走授权解析器）。
+   * 以下仅作可选快照，永不作为鉴权依据；缺省可避免把大权限集塞进 Cookie 超限。 */
+  roles?: string[];
+  permissions?: string[];
+  dataScopes?: DataScope[];
   version: typeof SESSION_VERSION;
   issuedAt: number;
   expiresAt: number;
@@ -48,7 +57,7 @@ function assertSecret(secret: string): void {
 }
 
 export function createSessionCookieValue(
-  identity: Omit<SessionClaims, "version" | "issuedAt" | "expiresAt" | "sessionId"> & { sessionId?: string },
+  identity: Pick<SessionClaims, "tenantId" | "actorId" | "channel"> & { sessionId?: string; roles?: string[]; permissions?: string[]; dataScopes?: DataScope[] },
   secret: string,
   options: { now?: Date; ttlSeconds?: number } = {},
 ): string {
@@ -78,14 +87,15 @@ export function verifySessionCookieValue(value: string, secret: string, now: Dat
   }
   if (!claims || typeof claims !== "object" || Array.isArray(claims)) throw new Error("SESSION_INVALID");
   const record = claims as Record<string, unknown>;
+  const snapshotValid = (record.roles === undefined || isStringArray(record.roles))
+    && (record.permissions === undefined || isStringArray(record.permissions))
+    && (record.dataScopes === undefined || (Array.isArray(record.dataScopes) && record.dataScopes.every(isDataScope)));
   const valid = record.version === SESSION_VERSION
     && typeof record.tenantId === "string" && record.tenantId.length > 0
     && typeof record.actorId === "string" && record.actorId.length > 0
     && typeof record.sessionId === "string" && record.sessionId.length > 0
     && isChannel(record.channel)
-    && isStringArray(record.roles)
-    && isStringArray(record.permissions)
-    && Array.isArray(record.dataScopes) && record.dataScopes.every(isDataScope)
+    && snapshotValid
     && typeof record.issuedAt === "number"
     && typeof record.expiresAt === "number";
   if (!valid || (record.expiresAt as number) <= Math.floor(now.getTime() / 1000)) throw new Error("SESSION_INVALID");

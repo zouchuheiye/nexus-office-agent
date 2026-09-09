@@ -62,6 +62,7 @@
 - P3 网页：任务卡新增子任务面板（折叠清单、勾选/重开/删除/新增、显示 done/total 与完成人/证据）；存在未完成子任务时“提交验收”按钮前置禁用并提示剩余项；提供“让 Agent 起草勾选建议”快捷预填；globals.css 配套样式。
 - P3 测试与验证：单测新增 6 个场景（双方可拆且旁观者拒绝、完成/重开与证据门禁、in_review 锁定、workspace 进度暴露、Agent 工具注册与确认策略、schema 证据格式）；Postgres 集成测试覆盖落库、CAS 冲突、进度聚合与锁定期；本地开发库应用 0048 后 workspace 接口恢复 200。
 - P3 HTTP 通道修复与回归：子任务 POST/PATCH 路由改为“先注入路径 packageId/subtaskId 再校验 body”（body 不再携带 id），并补 API 级路由测试（新增/勾选/列表/门禁/锁定全链路）；`applicationErrorResponse` 补 `_LOCKED` 类错误 → 409，保证 `WORK_PACKAGE_SUBTASKS_LOCKED` 不再落为 500。
+- P1 身份切换缺陷修复：开发管理员（manager）权限集约 140 项，签发到签名会话 Cookie 后接近 5KB、超过浏览器单 Cookie ~4KB 上限，浏览器静默丢弃新 Cookie 导致切回管理员后仍停留旧身份（如周然）。已改为会话 Cookie 只承载最小身份标识（tenantId/actorId/channel/sessionId），roles/permissions/dataScopes 不再内嵌（服务端本就按 actorId 从白名单/授权解析器每请求重建权限，Cookie 快照从不被信任）；开发切换与 OIDC 回调两条签发通道同时瘦身，manager Cookie 由 ~4.96KB 降至 ~343B，并补“超 4KB 亦可被浏览器覆盖”的回归测试。
 
 ## Pending
 
@@ -76,7 +77,7 @@ P01 复核 MVP-FIX 的 P0/P1 快照、P2 双通道交付（提交验收/验收�
 
 - [x] `npm run typecheck`：exit 0。
 - [x] `npm run lint`：exit 0（零警告）。
-- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（527 passed / 26 skipped）。
+- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（528 passed / 26 skipped）。
 - [x] P0 导出过滤单测、P1 身份切换集成测试、P2 验收流转单测（review_decision 边界 + reviewNote 事件审计）、P2 amend/supersede 单元与集成测试：通过。
 - [x] P3 单测（双方可拆且旁观者拒绝、完成/重开与证据门禁、in_review 锁定、workspace 进度暴露、Agent 工具注册与 R3 确认策略、schema 证据格式）与 Postgres 集成测试（落库、CAS 冲突、进度聚合、锁定期）：通过。
 - [x] `node .ai-team/check.mjs`：Result: valid（functional 13/14，唯一未勾为 P3 后续证据附件与 P4/P5 排期项）。

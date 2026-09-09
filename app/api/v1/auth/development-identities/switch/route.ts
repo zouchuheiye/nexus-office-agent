@@ -28,9 +28,6 @@ export async function POST(request: Request) {
       tenantId: "00000000-0000-4000-8000-000000000001",
       actorId: identity.actorId,
       channel: "web",
-      roles: identity.roles,
-      permissions: identity.permissions,
-      dataScopes: identity.dataScopes,
       sessionId: randomUUID(),
     }, secret);
     const response = NextResponse.json({ data: { identity: { key: identity.key, actorId: identity.actorId, displayName: identity.displayName, roles: identity.roles } } });
