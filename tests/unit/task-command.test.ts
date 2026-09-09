@@ -159,6 +159,38 @@ describe("real-time task command domain", () => {
     expect((await service.workspace(owner)).myTasks).toHaveLength(0);
   });
 
+  it("P2: 发布人可在事件链中留下验收通过/退回决定与退回原因（reviewNote），承接人可见退回事实", async () => {
+    const { service, publisher, conversation } = await fixture();
+    const assigned = (await service.publishMission(publisher, {
+      ...missionInput(conversation.id),
+      packages: [{ title: "验收流转包", description: "验证发布人验收决定。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_DELIVERY_OWNER_ID, startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 3, priority: "high" as const, dueAt: "2030-08-10T10:00:00.000Z", capacityPoints: 1 }],
+    })).packages[0];
+    const delivery = createDevelopmentRequestContext("review-delivery", "delivery");
+    // 执行人不能自我验收：未到 in_review 前，in_progress→completed 直接完成在旧流程仍允许（见上一测试）；
+    // 一旦进入 in_review，通过/退回只能由发布人（管理者）作出。
+    const running = await service.transitionPackage(delivery, assigned.id, { expectedVersion: 1, nextStatus: "in_progress" });
+    const submitted = await service.transitionPackage(delivery, assigned.id, { expectedVersion: running.version, nextStatus: "in_review", evidenceRefs: ["document:delivery-evidence"] });
+    expect(submitted).toMatchObject({ status: "in_review", evidenceRefs: ["document:delivery-evidence"] });
+    await expect(service.transitionPackage(delivery, assigned.id, { expectedVersion: submitted.version, nextStatus: "completed" })).rejects.toThrow("POLICY_DENIED:work_task:review_decision");
+    await expect(service.transitionPackage(delivery, assigned.id, { expectedVersion: submitted.version, nextStatus: "in_progress", reviewNote: "自行撤回" })).rejects.toThrow("POLICY_DENIED:work_task:review_decision");
+
+    // 发布人（manager）退回：回到 in_progress，退回原因进入状态事件 payload
+    const returned = await service.transitionPackage(publisher, assigned.id, { expectedVersion: submitted.version, nextStatus: "in_progress", reviewNote: "证据缺少客户签字页，请补充后重新提交。" });
+    expect(returned).toMatchObject({ status: "in_progress", evidenceRefs: ["document:delivery-evidence"] });
+    const events = await service.events(publisher, 0, 100);
+    const rejectEvent = events.find((item) => item.packageId === assigned.id && item.eventType === "package_status_changed" && item.payload.decision === "reject");
+    expect(rejectEvent?.payload.reviewNote).toBe("证据缺少客户签字页，请补充后重新提交。");
+    expect(rejectEvent?.payload.previousStatus).toBe("in_review");
+
+    // 再提交后发布人通过：decision=accept 记入事件链
+    const resubmitted = await service.transitionPackage(delivery, assigned.id, { expectedVersion: returned.version, nextStatus: "in_review", evidenceRefs: ["document:delivery-evidence", "document:sign-page"] });
+    await service.transitionPackage(publisher, assigned.id, { expectedVersion: resubmitted.version, nextStatus: "completed" });
+    const afterAccept = await service.events(publisher, 0, 100);
+    const acceptEvent = afterAccept.find((item) => item.packageId === assigned.id && item.eventType === "package_status_changed" && item.payload.decision === "accept");
+    expect(acceptEvent?.payload.nextStatus).toBe("completed");
+    expect((await service.workspace(delivery)).myTasks).toEqual([]);
+  });
+
   it("gates formal department dispatch and keeps pool communication out of the task state machine", async () => {
     const { service, publisher, conversation } = await fixture();
     const departmentBundle = await service.publishMission(publisher, {

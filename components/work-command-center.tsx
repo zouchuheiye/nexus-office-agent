@@ -77,8 +77,12 @@ export function WorkCommandCenter({
   const [refreshing, setRefreshing] = useState(false);
   const [handoffTask, setHandoffTask] = useState<Task | null>(null);
   const [handoffDraft, setHandoffDraft] = useState({ toAssigneeId: "", note: "", currentProgress: "", completedWork: "", pendingWork: "", attentionPoints: "" });
-  const [confirmAction, setConfirmAction] = useState<{ kind: "cancel" | "revoke" | "accept"; task?: Task; handoff?: TaskHandoff } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ kind: "cancel" | "revoke" | "accept" | "approve_review"; task?: Task; handoff?: TaskHandoff } | null>(null);
   const [rejectHandoffDraft, setRejectHandoffDraft] = useState<{ handoff: TaskHandoff; version: number; responseNote: string } | null>(null);
+  const [reviewSubmitTask, setReviewSubmitTask] = useState<Task | null>(null);
+  const [reviewEvidenceDraft, setReviewEvidenceDraft] = useState("");
+  const [reviewReturnTask, setReviewReturnTask] = useState<Task | null>(null);
+  const [reviewReturnNote, setReviewReturnNote] = useState("");
   const hydrated = useRef(false);
   const conversationEnd = useRef<HTMLDivElement>(null);
   const didInitialJump = useRef(false);
@@ -205,6 +209,43 @@ export function WorkCommandCenter({
     finally { setBusyTask(""); }
   }
 
+  async function submitReview(task: Task) {
+    if (!reviewEvidenceDraft.trim() && !task.evidenceRefs.length) { onNotice("提交验收必须附上可核验证据引用"); return; }
+    const lines = [...new Set(reviewEvidenceDraft.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))];
+    setBusyTask(task.id);
+    try {
+      await api(`/api/v1/task-command/packages/${task.id}/transition`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: task.version, nextStatus: "in_review", evidenceRefs: [...new Set([...task.evidenceRefs, ...lines])] }) });
+      setReviewSubmitTask(null);
+      setReviewEvidenceDraft("");
+      onNotice("已提交验收，等待发布人核验");
+      await loadWorkspace();
+    } catch (cause) { onNotice(cause instanceof Error ? cause.message : "提交验收失败"); }
+    finally { setBusyTask(""); }
+  }
+
+  async function approveReviewRequest(task: Task) {
+    setBusyTask(task.id);
+    try {
+      await api(`/api/v1/task-command/packages/${task.id}/transition`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: task.version, nextStatus: "completed" }) });
+      onNotice("验收已通过，任务完成");
+      await loadWorkspace();
+    } catch (cause) { onNotice(cause instanceof Error ? cause.message : "验收通过失败"); }
+    finally { setBusyTask(""); }
+  }
+
+  async function submitReviewReturn(task: Task) {
+    if (!reviewReturnNote.trim()) { onNotice("退回必须填写至少 4 字的退回原因"); return; }
+    setBusyTask(task.id);
+    try {
+      await api(`/api/v1/task-command/packages/${task.id}/transition`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedVersion: task.version, nextStatus: "in_progress", reviewNote: reviewReturnNote.trim() }) });
+      setReviewReturnTask(null);
+      setReviewReturnNote("");
+      onNotice("已退回任务，等待承接人补充后再次提交");
+      await loadWorkspace();
+    } catch (cause) { onNotice(cause instanceof Error ? cause.message : "退回任务失败"); }
+    finally { setBusyTask(""); }
+  }
+
   async function cancelTask(task: Task) {
     setConfirmAction({ kind: "cancel", task });
   }
@@ -228,6 +269,7 @@ export function WorkCommandCenter({
     if (!action) return;
     setConfirmAction(null);
     if (action.kind === "cancel" && action.task) await transition(action.task, "cancelled");
+    if (action.kind === "approve_review" && action.task) await approveReviewRequest(action.task);
     if (action.kind === "revoke" && action.handoff) await revokeHandoffRequest(action.handoff);
     if (action.kind === "accept" && action.handoff) await acceptHandoffRequest(action.handoff);
   }
@@ -350,7 +392,7 @@ export function WorkCommandCenter({
             {taskHandoffs.length ? <details className="task-handoff-trail"><summary>交接链 · {taskHandoffs.length} 棒{taskHandoffs.some(({ status }) => status === "pending") ? " · 待签收" : ""}</summary>{taskHandoffs.slice(-4).map((handoff) => <div className="task-handoff-line" key={handoff.id}><span>{peopleById.get(handoff.fromAssigneeId)?.displayName ?? "前负责人"}<ArrowRight size={11} />{peopleById.get(handoff.toAssigneeId)?.displayName ?? "接收人"}</span><small>{handoff.status === "pending" ? "待签收" : handoff.status === "accepted" ? "已签收" : handoff.respondedBy === handoff.fromAssigneeId ? "已撤回" : "已退回"} · 文件/资料 {handoff.artifactRefs.length} · v{handoff.snapshot.packageVersion}</small><p>{handoff.note}</p>{handoff.currentProgress ? <p className="task-handoff-field"><b>当前进度</b>{handoff.currentProgress}</p> : null}{handoff.completedWork ? <p className="task-handoff-field"><b>已完成</b>{handoff.completedWork}</p> : null}{handoff.pendingWork ? <p className="task-handoff-field"><b>未完成</b>{handoff.pendingWork}</p> : null}{handoff.attentionPoints ? <p className="task-handoff-field"><b>注意</b>{handoff.attentionPoints}</p> : null}{handoff.responseNote ? <p className="task-handoff-response">{handoff.responseNote}</p> : null}</div>)}</details> : null}
             <details className="task-timeline" onToggle={(event) => { if (event.currentTarget.open) void loadTimeline(task.id); }}><summary>时间线 · {timelines[task.id]?.length ?? 0} 条</summary>{(timelines[task.id] ?? []).map((item) => <div className="task-timeline-line" key={item.id}><span>{timelineEventCopy[item.eventType] ?? item.eventType}</span><small>{formatDate(item.occurredAt)}</small></div>)}</details>
             {taskMode === "mine" && task.assigneeId && !taskHandoffs.some(({ status }) => status === "pending") && !["in_review", "completed", "cancelled"].includes(task.status) ? <button className="task-handoff-action" type="button" onClick={() => { setHandoffTask(task); setHandoffDraft((current) => ({ ...current, toAssigneeId: workspace?.people.find(({ id }) => id !== task.assigneeId)?.id ?? "" })); }}>发起交接<ArrowRight size={13} /></button> : null}
-            <footer>{task.isTemplate && taskMode === "published" ? <button onClick={() => onQueryChange(`补充任务模板“${task.title}”，模板 ID 为 ${task.id}，当前版本为 ${task.version}。请先询问我想补充哪些字段，再使用 work.update_task_template 更新；不要正式分派。`)}>补充模板<ArrowRight size={13} /></button> : taskMode === "handoffs" && pendingHandoff ? <><button disabled={busyTask === task.id} onClick={() => void acceptHandoff(pendingHandoff, task.version)}>{busyTask === task.id ? "处理中…" : "签收"}<Check size={13} /></button><button className="task-handoff-reject" disabled={busyTask === task.id} onClick={() => void rejectHandoff(pendingHandoff, task.version)}>退回</button></> : taskMode === "available" ? <button disabled={busyTask === task.id} onClick={() => void claim(task)}>{busyTask === task.id ? "承接中…" : "承接"}<ArrowRight size={13} /></button> : taskMode === "mine" && task.status === "in_progress" ? <button onClick={() => onQueryChange(`任务“${task.title}”已完成执行，请使用 work.update_my_task 工具将任务 ${task.id}（当前版本 ${task.version}）提交验收，并附上证据引用：`)}>提交验收<Check size={13} /></button> : taskMode === "mine" && task.status === "blocked" ? <button disabled={busyTask === task.id} onClick={() => void transition(task, "in_progress")}>解除阻塞<ArrowRight size={13} /></button> : taskMode === "mine" && task.status === "in_review" ? <button onClick={() => onQueryChange(`任务“${task.title}”已通过验收，请使用 work.update_my_task 工具将任务 ${task.id}（当前版本 ${task.version}）标记完成，证据引用为：`)}>完成<ArrowRight size={13} /></button> : <span>{formatRelative(task.dueAt)}</span>}{taskMode === "handoffs" && outgoingHandoffsByTask.has(task.id) ? <button className="task-handoff-revoke" type="button" disabled={busyTask === task.id} onClick={() => void revokeHandoff(outgoingHandoffsByTask.get(task.id)!, task.version)}>{busyTask === task.id ? "撤回中…" : "撤回交接"}<ArrowRight size={13} /></button> : null}</footer>
+            <footer>{task.isTemplate && taskMode === "published" ? <button onClick={() => onQueryChange(`补充任务模板“${task.title}”，模板 ID 为 ${task.id}，当前版本为 ${task.version}。请先询问我想补充哪些字段，再使用 work.update_task_template 更新；不要正式分派。`)}>补充模板<ArrowRight size={13} /></button> : taskMode === "handoffs" && pendingHandoff ? <><button disabled={busyTask === task.id} onClick={() => void acceptHandoff(pendingHandoff, task.version)}>{busyTask === task.id ? "处理中…" : "签收"}<Check size={13} /></button><button className="task-handoff-reject" disabled={busyTask === task.id} onClick={() => void rejectHandoff(pendingHandoff, task.version)}>退回</button></> : taskMode === "available" ? <button disabled={busyTask === task.id} onClick={() => void claim(task)}>{busyTask === task.id ? "承接中…" : "承接"}<ArrowRight size={13} /></button> : taskMode === "published" && !task.isTemplate && task.status === "in_review" ? <><button disabled={busyTask === task.id} onClick={() => setConfirmAction({ kind: "approve_review", task })}>{busyTask === task.id ? "处理中…" : "验收通过"}<Check size={13} /></button><button className="task-handoff-reject" disabled={busyTask === task.id} onClick={() => { setReviewReturnTask(task); setReviewReturnNote(""); }}>退回</button></> : taskMode === "mine" && task.status === "in_progress" ? <button disabled={busyTask === task.id} onClick={() => { setReviewEvidenceDraft(task.evidenceRefs.join("\n")); setReviewSubmitTask(task); }}>提交验收<Check size={13} /></button> : taskMode === "mine" && task.status === "blocked" ? <button disabled={busyTask === task.id} onClick={() => void transition(task, "in_progress")}>解除阻塞<ArrowRight size={13} /></button> : taskMode === "mine" && task.status === "in_review" && task.assigneeId === task.publishedBy ? <><button disabled={busyTask === task.id} onClick={() => setConfirmAction({ kind: "approve_review", task })}>{busyTask === task.id ? "处理中…" : "验收通过"}<Check size={13} /></button><button className="task-handoff-reject" disabled={busyTask === task.id} onClick={() => { setReviewReturnTask(task); setReviewReturnNote(""); }}>退回</button></> : taskMode === "mine" && task.status === "in_review" ? <span className="task-review-waiting"><i />等待发布人验收</span> : <span>{formatRelative(task.dueAt)}</span>}{taskMode === "handoffs" && outgoingHandoffsByTask.has(task.id) ? <button className="task-handoff-revoke" type="button" disabled={busyTask === task.id} onClick={() => void revokeHandoff(outgoingHandoffsByTask.get(task.id)!, task.version)}>{busyTask === task.id ? "撤回中…" : "撤回交接"}<ArrowRight size={13} /></button> : null}</footer>
           </article></div>}); })()}
           </div>
         </> : <div className="message-pool-list">
@@ -359,8 +401,10 @@ export function WorkCommandCenter({
       </aside>
     </div>
     {handoffTask ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-dialog-title"><header><div><span className="command-kicker"><ArrowRight size={13} />TASK HANDOFF</span><h2 id="handoff-dialog-title">发起交接</h2><p>{handoffTask.title} · 当前版本 {handoffTask.version}</p></div><button type="button" className="icon-button" aria-label="关闭发起交接" onClick={() => setHandoffTask(null)}>×</button></header><label>交接给谁<select value={handoffDraft.toAssigneeId} onChange={(event) => setHandoffDraft((current) => ({ ...current, toAssigneeId: event.target.value }))}><option value="">选择成员</option>{workspace?.people.filter(({ id }) => id !== handoffTask.assigneeId).map((person) => <option value={person.id} key={person.id}>{person.displayName} · {person.orgName ?? ""}</option>)}</select></label><label>交接说明<textarea value={handoffDraft.note} onChange={(event) => setHandoffDraft((current) => ({ ...current, note: event.target.value }))} rows={2} /></label><label>当前进度<textarea value={handoffDraft.currentProgress} onChange={(event) => setHandoffDraft((current) => ({ ...current, currentProgress: event.target.value }))} rows={2} /></label><label>已完成<textarea value={handoffDraft.completedWork} onChange={(event) => setHandoffDraft((current) => ({ ...current, completedWork: event.target.value }))} rows={2} /></label><label>未完成<textarea value={handoffDraft.pendingWork} onChange={(event) => setHandoffDraft((current) => ({ ...current, pendingWork: event.target.value }))} rows={2} /></label><label>注意事项（可选）<textarea value={handoffDraft.attentionPoints} onChange={(event) => setHandoffDraft((current) => ({ ...current, attentionPoints: event.target.value }))} rows={2} /></label><footer><button type="button" onClick={() => setHandoffTask(null)}>取消</button><button type="button" className="primary" disabled={busyTask === handoffTask.id} onClick={() => void submitHandoff()}>{busyTask === handoffTask.id ? "提交中…" : "预览并发起"}<ArrowRight size={13} /></button></footer></section></div> : null}
-    {confirmAction ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="task-confirm-title"><h2 id="task-confirm-title">确认操作</h2><p>{confirmAction.kind === "cancel" ? `确认取消任务「${confirmAction.task?.title}」？取消后不可恢复。` : confirmAction.kind === "accept" ? "确认签收交接？签收后任务责任将切换到你的名下。" : "确认撤回交接？对方将不能再签收。"}</p><footer><button type="button" onClick={() => setConfirmAction(null)}>返回</button><button type="button" className="primary" onClick={() => void executeConfirmAction()}>确认</button></footer></section></div> : null}
+    {confirmAction ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="task-confirm-title"><h2 id="task-confirm-title">确认操作</h2><p>{confirmAction.kind === "cancel" ? `确认取消任务「${confirmAction.task?.title}」？取消后不可恢复。` : confirmAction.kind === "accept" ? "确认签收交接？签收后任务责任将切换到你的名下。" : confirmAction.kind === "approve_review" ? `确认验收通过「${confirmAction.task?.title}」？任务将标记为已完成，操作将记录验收人。` : "确认撤回交接？对方将不能再签收。"}</p><footer><button type="button" onClick={() => setConfirmAction(null)}>返回</button><button type="button" className="primary" onClick={() => void executeConfirmAction()}>确认</button></footer></section></div> : null}
     {rejectHandoffDraft ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="reject-handoff-title"><h2 id="reject-handoff-title">退回交接</h2><p>请填写退回原因，至少 4 个字。</p><textarea autoFocus value={rejectHandoffDraft.responseNote} onChange={(event) => setRejectHandoffDraft((current) => current ? { ...current, responseNote: event.target.value } : current)} rows={4} /><footer><button type="button" onClick={() => setRejectHandoffDraft(null)}>取消</button><button type="button" className="primary" onClick={() => void submitRejectHandoff()}>确认退回</button></footer></section></div> : null}
+    {reviewSubmitTask ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="review-submit-title"><h2 id="review-submit-title">提交验收</h2><p>任务将进入“待验收”，由发布人核验。服务端要求至少一条可核验证据；可写 URL、文档 ID 或交付说明（每行一条）。</p><textarea autoFocus value={reviewEvidenceDraft} onChange={(event) => setReviewEvidenceDraft(event.target.value)} rows={5} placeholder={reviewSubmitTask.evidenceRefs.length ? "已有证据可直接提交，或补充新证据…" : "粘贴证据链接 / 文档 ID，每行一条…"} /><footer><button type="button" onClick={() => { setReviewSubmitTask(null); setReviewEvidenceDraft(""); }}>取消</button><button type="button" className="primary" disabled={busyTask === reviewSubmitTask.id || (!reviewEvidenceDraft.trim() && !reviewSubmitTask.evidenceRefs.length)} onClick={() => void submitReview(reviewSubmitTask)}>{busyTask === reviewSubmitTask.id ? "提交中…" : "提交验收"}<Check size={13} /></button></footer></section></div> : null}
+    {reviewReturnTask ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="review-return-title"><h2 id="review-return-title">退回任务</h2><p>任务将回到执行人手中继续补充。退回原因必须填写且至少 4 个字，会记入事件链供执行人查看。</p><textarea autoFocus value={reviewReturnNote} onChange={(event) => setReviewReturnNote(event.target.value)} rows={4} placeholder="说明未通过的原因（例如：证据缺少客户签字页）" /><footer><button type="button" onClick={() => { setReviewReturnTask(null); setReviewReturnNote(""); }}>取消</button><button type="button" className="primary" disabled={busyTask === reviewReturnTask.id || reviewReturnNote.trim().length < 4} onClick={() => void submitReviewReturn(reviewReturnTask)}>{busyTask === reviewReturnTask.id ? "退回中…" : "确认退回"}<ArrowRight size={13} /></button></footer></section></div> : null}
   </div>;
 }
 

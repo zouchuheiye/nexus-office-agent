@@ -357,8 +357,22 @@ export class TaskCommandService {
     const canManage = current.assigneeId === context.actorId || current.publishedBy === context.actorId || hasPermission(context, "work_task:admin");
     if (!canManage) throw new Error("POLICY_DENIED:work_task:ownership");
     if (current.version !== input.expectedVersion) throw new Error("WORK_PACKAGE_VERSION_CONFLICT");
+    // P2 产品边界：验收通过/退回是发布人（管理者）的决定，不是执行人的自助操作；
+    // 从 in_review 离开到 completed/in_progress 只允许发布人或管理员，AI 仅能起草意见、不能代为通过/退回。
+    if (current.status === "in_review" && ["completed", "in_progress"].includes(input.nextStatus)) {
+      const isReviewer = current.publishedBy === context.actorId || hasPermission(context, "work_task:admin");
+      if (!isReviewer) throw new Error("POLICY_DENIED:work_task:review_decision");
+      if (input.nextStatus === "in_progress" && !input.reviewNote?.trim()) throw new Error("WORK_REVIEW_RETURN_REASON_REQUIRED");
+    }
     const next = transitionWorkPackage(current, input);
-    const changed = await this.repository.transitionPackage({ current, next, expectedVersion: input.expectedVersion, event: event({ tenantId: context.tenantId, missionId: current.missionId, packageId: current.id, eventType: "package_status_changed", actorId: context.actorId, audience: "participants", payload: { previousStatus: current.status, nextStatus: next.status, version: next.version } }) });
+    const eventPayload: Record<string, unknown> = { previousStatus: current.status, nextStatus: next.status, version: next.version };
+    if (current.status === "in_review" && input.nextStatus === "in_progress" && input.reviewNote) {
+      eventPayload.reviewNote = input.reviewNote.trim();
+      eventPayload.decision = "reject";
+    } else if (current.status === "in_review" && input.nextStatus === "completed") {
+      eventPayload.decision = "accept";
+    }
+    const changed = await this.repository.transitionPackage({ current, next, expectedVersion: input.expectedVersion, event: event({ tenantId: context.tenantId, missionId: current.missionId, packageId: current.id, eventType: "package_status_changed", actorId: context.actorId, audience: "participants", payload: eventPayload }) });
     if (!changed) throw new Error("WORK_PACKAGE_VERSION_CONFLICT");
     return next;
   }

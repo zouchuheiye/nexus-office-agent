@@ -75,6 +75,8 @@ export const transitionPackageSchema = z.object({
   nextStatus: z.enum(["published", "assigned", "claimed", "in_progress", "blocked", "in_review", "completed", "cancelled"]),
   evidenceRefs: z.array(z.string().trim().min(2).max(240)).max(20).optional(),
   blockedReason: z.string().trim().min(4).max(500).optional(),
+  /** P2: 验收退回（in_review → in_progress）时记录退回原因，进入事件链审计。 */
+  reviewNote: z.string().trim().min(4).max(500).optional(),
 }).strict();
 
 export const initiateTaskHandoffSchema = z.object({

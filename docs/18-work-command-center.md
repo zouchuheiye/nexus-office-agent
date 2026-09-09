@@ -36,6 +36,8 @@ flowchart LR
 
 定向任务从 `assigned` 开始；执行中可进入 `blocked` 并在解除后回到 `in_progress`。阻塞需要原因，完成需要至少一个证据引用。系统不把“模型说已完成”当成完成证据。
 
+验收是发布人的决定，不是执行人的自助操作：任务进入 `in_review` 后，只有发布人或管理员能把状态推进到 `completed`（通过）或退回 `in_progress`（退回必须填原因）。退回原因（`reviewNote`）与决定（`accept`/`reject`）写入 `work_task_events` 的 `package_status_changed` payload，事件链可追溯。网页“我的/已发布”任务栏提供直连的“提交验收（附证据）→ 通过/退回”按钮；AI 只可起草验收意见，不能代为通过或退回。
+
 ### 2.1 任务交接链
 
 任务交接不是把 `assignee_id` 直接改成另一个人，而是一条可签收的责任链。发起人必须是当前负责人、发布人或具有任务管理权限的主体，并且拥有 `work_task:handoff`；跨部门目标同时要求 `work_task:handoff_cross_department` 和目标部门数据范围。目标必须是当前有效成员。

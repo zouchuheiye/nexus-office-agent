@@ -70,6 +70,8 @@ type RequestContext = {
 
 开发/内网验证身份仅在本机开发或显式开启 `NEXUS_ALLOW_DEMO_IDENTITY` 时提供：`GET /auth/development-identities` 列出服务端定义的可选身份（不含权限明细），`POST /auth/development-identities/switch` 用 `key` 签发已签名会话 Cookie。关闭或未开启时二者分别返回 `403 DEMO_IDENTITY_DISABLED` 与 `503 DEMO_IDENTITY_SECRET_MISSING`，不会退化为任意扮演。
 
+任务推进 `POST /packages/:id/transition` 是验收闭环的唯一写通道，接受 `expectedVersion/nextStatus`，并按目标状态要求 `evidenceRefs`、`blockedReason` 或验收退回原因 `reviewNote`。从 `in_review` 离开时只有发布人或管理员能决定 `completed`（通过，payload 记 `decision=accept`）或退回 `in_progress`（payload 记 `decision=reject` 与 `reviewNote`，退回原因至少 4 字）；执行人不可自我验收，AI 只能起草意见、不能代为通过/退回。
+
 会议确认转化的决定保存 `sourceMeetingId`，服务端校验来源会议和决定属于同一租户、同一项目；行动项通过 `decisionId` 关联该决定。知识搜索只返回当前已生效且未过期版本，并在引用中返回原始 `sourceRef`、版本定位、有效时间和不泄露 ACL 明细的 `accessBasis`。
 
 ## 3. Agent API
