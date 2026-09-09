@@ -4,6 +4,8 @@ import { GET as getWorkspace } from "@/app/api/v1/task-command/workspace/route";
 import { POST as publishMission } from "@/app/api/v1/task-command/missions/route";
 import { POST as claimTask } from "@/app/api/v1/task-command/packages/[id]/claim/route";
 import { POST as transitionTask } from "@/app/api/v1/task-command/packages/[id]/transition/route";
+import { GET as listSubtasks, POST as addSubtask } from "@/app/api/v1/task-command/packages/[id]/subtasks/route";
+import { PATCH as updateSubtask, DELETE as deleteSubtask } from "@/app/api/v1/task-command/packages/[id]/subtasks/[subtaskId]/route";
 import { POST as publishMessage } from "@/app/api/v1/task-command/message-pools/messages/route";
 import { POST as feedbackMessage } from "@/app/api/v1/task-command/message-pools/messages/[id]/feedback/route";
 import { GET as getHandoffTrail, POST as initiateHandoff } from "@/app/api/v1/task-command/packages/[id]/handoffs/route";
@@ -155,5 +157,67 @@ startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7,         priority: "medi
       expect.objectContaining({ id: direct.id }),
       expect.objectContaining({ id: openClaim.id }),
     ]));
+  });
+
+  it("P3: HTTP subtask routes add/complete/list/delete checklist items and gate the review submission", async () => {
+    const initial = await getWorkspace(request("http://localhost/api/v1/task-command/workspace"));
+    const conversationId = (await initial.json()).data.conversation.id as string;
+    const marker = crypto.randomUUID().slice(0, 8);
+    const published = await publishMission(request("http://localhost/api/v1/task-command/missions", {
+      conversationId,
+      title: `子任务 API ${marker}`,
+      objective: "验证子任务 HTTP 通道与验收门禁。",
+      priority: "high",
+      dueAt: "2030-09-01T10:00:00.000Z",
+      packages: [{ title: `子任务开放包 ${marker}`, description: "开放承接。", acceptanceCriteria: "完成全部子任务后验收。", requiredSkills: ["交付"], assignmentMode: "open_claim", startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7, priority: "medium", dueAt: "2030-08-30T10:00:00.000Z", capacityPoints: 2 }],
+    }));
+    const task = (await published.json()).data.packages[0];
+    const claimed = await claimTask(
+      request(`http://localhost/api/v1/task-command/packages/${task.id}/claim`, { expectedVersion: 1 }),
+      { params: Promise.resolve({ id: task.id }) },
+    );
+    expect((await claimed.json()).data.task).toMatchObject({ status: "claimed", version: 2 });
+    const started = await transitionTask(
+      request(`http://localhost/api/v1/task-command/packages/${task.id}/transition`, { expectedVersion: 2, nextStatus: "in_progress" }),
+      { params: Promise.resolve({ id: task.id }) },
+    );
+    expect((await started.json()).data.task).toMatchObject({ status: "in_progress", version: 3 });
+    // 路由从路径注入 packageId：body 不需要也不应带 packageId
+    const added = await addSubtask(
+      request(`http://localhost/api/v1/task-command/packages/${task.id}/subtasks`, { title: "整理验收证据" }),
+      { params: Promise.resolve({ id: task.id }) },
+    );
+    expect(added.status).toBe(201);
+    const subtask = (await added.json()).data.subtask;
+    expect(subtask).toMatchObject({ packageId: task.id, status: "pending", version: 1 });
+    const list = await listSubtasks(request(`http://localhost/api/v1/task-command/packages/${task.id}/subtasks`), { params: Promise.resolve({ id: task.id }) });
+    expect((await list.json()).data.progress).toEqual({ done: 0, total: 1 });
+    // 未完成时提交验收被拦截
+    const gated = await transitionTask(
+      request(`http://localhost/api/v1/task-command/packages/${task.id}/transition`, { expectedVersion: 3, nextStatus: "in_review", evidenceRefs: ["document:summary"] }),
+      { params: Promise.resolve({ id: task.id }) },
+    );
+    expect(gated.status).toBe(409);
+    expect((await gated.json()).error.code).toBe("WORK_PACKAGE_SUBTASKS_PENDING:0/1");
+    // PATCH 路由同样从路径注入 packageId/subtaskId
+    const completed = await updateSubtask(
+      request(`http://localhost/api/v1/task-command/packages/${task.id}/subtasks/${subtask.id}`, { expectedVersion: 1, done: true, note: "证据已归档", evidenceRefs: ["document:evidence-v1"] }),
+      { params: Promise.resolve({ id: task.id, subtaskId: subtask.id }) },
+    );
+    expect(completed.status).toBe(200);
+    expect((await completed.json()).data.subtask).toMatchObject({ status: "done", doneNote: "证据已归档", evidenceRefs: ["document:evidence-v1"] });
+    // 全部完成后进入验收
+    const accepted = await transitionTask(
+      request(`http://localhost/api/v1/task-command/packages/${task.id}/transition`, { expectedVersion: 3, nextStatus: "in_review", evidenceRefs: ["document:summary"] }),
+      { params: Promise.resolve({ id: task.id }) },
+    );
+    expect((await accepted.json()).data.task).toMatchObject({ status: "in_review", version: 4 });
+    // in_review 锁定：不能再删除或改动子任务
+    const locked = await deleteSubtask(
+      request(`http://localhost/api/v1/task-command/packages/${task.id}/subtasks/${subtask.id}?expectedVersion=2`),
+      { params: Promise.resolve({ id: task.id, subtaskId: subtask.id }) },
+    );
+    expect(locked.status).toBe(409);
+    expect((await locked.json()).error.code).toBe("WORK_PACKAGE_SUBTASKS_LOCKED");
   });
 });

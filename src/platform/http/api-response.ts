@@ -56,7 +56,7 @@ const errorRules: ErrorRule[] = [
   { match: codes(["PROJECT_CODE_CONFLICT"]), status: 409, message: "项目编码已存在，请使用新的唯一编码。" },
   { match: (code) => code.startsWith("PROPOSAL_NOT_SUPERSEDABLE:") || code === "PROPOSAL_AMEND_NO_CHANGE", status: 409, message: "提案已确认、执行或内容未变化，不能重复修正；如需调整请发起新动作。" },
   { match: codes(["CLIENT_DEVICE_REVOKED", "CLIENT_PUSH_DISABLED"]), status: 409, message: "客户端设备已撤销或当前策略不允许该能力。" },
-  { match: (code) => code.includes("INVALID_TRANSITION") || code.includes("CANNOT_") || code.includes("_REQUIRED") || code.includes("_PENDING") || code.includes("_CONFLICT") || code.includes("_CHAIN_CHANGED") || code.includes("_NOT_PENDING") || code.includes("_NOT_ACTIVE") || code.includes("_VERSION_MISSING") || code.includes("MIXED_ARTIFACT_REFERENCES"), status: 409, message: "当前业务状态不允许该操作。" },
+  { match: (code) => code.includes("INVALID_TRANSITION") || code.includes("CANNOT_") || code.includes("_REQUIRED") || code.includes("_PENDING") || code.includes("_LOCKED") || code.includes("_CONFLICT") || code.includes("_CHAIN_CHANGED") || code.includes("_NOT_PENDING") || code.includes("_NOT_ACTIVE") || code.includes("_VERSION_MISSING") || code.includes("MIXED_ARTIFACT_REFERENCES"), status: 409, message: "当前业务状态不允许该操作。" },
 ];
 
 export function applicationErrorResponse(error: unknown): NextResponse {

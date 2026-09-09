@@ -10,8 +10,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   try {
     const context = await resolveRequestContext(request);
     const { id, subtaskId } = await params;
-    const input = updatePackageSubtaskSchema.parse(await parseJson(request));
-    const result = await getTaskCommandService().updatePackageSubtask(context, { ...input, packageId: id, subtaskId });
+    const input = updatePackageSubtaskSchema.parse({ ...(await parseJson(request)) as Record<string, unknown>, packageId: id, subtaskId });
+    const result = await getTaskCommandService().updatePackageSubtask(context, input);
     return NextResponse.json({ data: result, meta: { traceId: context.traceId } });
   } catch (error) { return applicationErrorResponse(error); }
 }

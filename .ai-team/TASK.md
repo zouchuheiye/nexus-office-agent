@@ -61,6 +61,7 @@
 - P3 Agent 工具：`work.list_package_subtasks`（只读）、`work.add_package_subtask`/`work.update_package_subtask`（风险 2 + 确认策略 always → AI 只能生成 R3 提案，不直接改子任务状态）。
 - P3 网页：任务卡新增子任务面板（折叠清单、勾选/重开/删除/新增、显示 done/total 与完成人/证据）；存在未完成子任务时“提交验收”按钮前置禁用并提示剩余项；提供“让 Agent 起草勾选建议”快捷预填；globals.css 配套样式。
 - P3 测试与验证：单测新增 6 个场景（双方可拆且旁观者拒绝、完成/重开与证据门禁、in_review 锁定、workspace 进度暴露、Agent 工具注册与确认策略、schema 证据格式）；Postgres 集成测试覆盖落库、CAS 冲突、进度聚合与锁定期；本地开发库应用 0048 后 workspace 接口恢复 200。
+- P3 HTTP 通道修复与回归：子任务 POST/PATCH 路由改为“先注入路径 packageId/subtaskId 再校验 body”（body 不再携带 id），并补 API 级路由测试（新增/勾选/列表/门禁/锁定全链路）；`applicationErrorResponse` 补 `_LOCKED` 类错误 → 409，保证 `WORK_PACKAGE_SUBTASKS_LOCKED` 不再落为 500。
 
 ## Pending
 
@@ -75,7 +76,7 @@ P01 复核 MVP-FIX 的 P0/P1 快照、P2 双通道交付（提交验收/验收�
 
 - [x] `npm run typecheck`：exit 0。
 - [x] `npm run lint`：exit 0（零警告）。
-- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（526 passed / 26 skipped）。
+- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（527 passed / 26 skipped）。
 - [x] P0 导出过滤单测、P1 身份切换集成测试、P2 验收流转单测（review_decision 边界 + reviewNote 事件审计）、P2 amend/supersede 单元与集成测试：通过。
 - [x] P3 单测（双方可拆且旁观者拒绝、完成/重开与证据门禁、in_review 锁定、workspace 进度暴露、Agent 工具注册与 R3 确认策略、schema 证据格式）与 Postgres 集成测试（落库、CAS 冲突、进度聚合、锁定期）：通过。
 - [x] `node .ai-team/check.mjs`：Result: valid（functional 13/14，唯一未勾为 P3 后续证据附件与 P4/P5 排期项）。

@@ -19,8 +19,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   try {
     const context = await resolveRequestContext(request);
     const { id } = await params;
-    const input = addPackageSubtaskSchema.parse(await parseJson(request));
-    const result = await getTaskCommandService().addPackageSubtask(context, { ...input, packageId: id });
+    const input = addPackageSubtaskSchema.parse({ ...(await parseJson(request)) as Record<string, unknown>, packageId: id });
+    const result = await getTaskCommandService().addPackageSubtask(context, input);
     return NextResponse.json({ data: result, meta: { traceId: context.traceId } }, { status: 201 });
   } catch (error) { return applicationErrorResponse(error); }
 }
