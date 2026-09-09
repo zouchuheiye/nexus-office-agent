@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ModelGateway, ModelMessage, ModelResponse, ModelToolCall } from "@/src/modules/agent/domain/model-gateway";
 import { createAgentRun, sha256, type AgentRun } from "@/src/modules/agent/domain/agent-run";
-import { approveProposal, createProposal, type AgentProposal } from "@/src/modules/agent/domain/proposal";
+import { approveProposal, createProposal, proposalInputDigest, supersedeProposal, type AgentProposal } from "@/src/modules/agent/domain/proposal";
 import { assertToolPolicy, modelToolName, type AgentTool, type ToolRegistry } from "@/src/modules/agent/domain/tool";
 import { createDefaultSkillRegistry, type SkillRegistry } from "@/src/modules/agent/domain/skill";
 import type { AgentStore, AgentToolCall } from "@/src/modules/agent/application/store";
@@ -349,6 +349,52 @@ export class AgentOrchestrator {
     const proposal = await this.store.getProposal(context.tenantId, id);
     if (!proposal || proposal.actorId !== context.actorId) throw new Error("PROPOSAL_NOT_FOUND");
     return proposal;
+  }
+
+  /**
+   * P2 可编辑预览卡的服务端底座：人对 AI 起草的 R3 提案逐字段修正后，
+   * 本方法把旧提案作废（superseded/revoked）并按修正后的 input 生成新提案；
+   * 新旧提案都保持不可篡改，只有新提案能被确认执行。
+   */
+  async amendProposal(context: RequestContext, id: string, providedHash: string, amendedInput: unknown): Promise<{ proposal: AgentProposal; supersededId: string }> {
+    const current = await this.store.getProposal(context.tenantId, id);
+    if (!current || current.actorId !== context.actorId) throw new Error("PROPOSAL_NOT_FOUND");
+    if (current.proposalHash !== providedHash) throw new Error("CONFIRMATION_HASH_MISMATCH");
+    const tool = this.tools.get(current.toolId);
+    const policy = assertToolPolicy(context, tool);
+    if (!policy.requiresConfirmation) throw new Error("CONFIRMATION_POLICY_CHANGED");
+    const input = tool.inputSchema.parse(amendedInput);
+    const inputDigest = proposalInputDigest(input);
+    if (inputDigest === current.inputDigest) throw new Error("PROPOSAL_AMEND_NO_CHANGE");
+    // 修正后若目标对象版本已漂移，不应生成可确认的新提案（与 confirm 同口径的防漂移门禁）
+    const projectId = typeof (input as { projectId?: unknown }).projectId === "string"
+      ? (input as { projectId: string }).projectId
+      : undefined;
+    let expectedVersions = current.expectedVersions;
+    if (projectId) {
+      const freshContext = await this.contexts.build(context, [`project:${projectId}`]);
+      for (const [objectId, version] of Object.entries(current.expectedVersions)) {
+        if (freshContext.expectedVersions[objectId] !== version) throw new Error("PROPOSAL_OBJECT_VERSION_CONFLICT");
+      }
+      expectedVersions = freshContext.expectedVersions;
+    }
+    const now = new Date();
+    const replacement = createProposal({
+      tenantId: current.tenantId,
+      agentRunId: current.agentRunId,
+      actorId: context.actorId,
+      toolId: current.toolId,
+      toolVersion: current.toolVersion,
+      riskLevel: tool.riskLevel,
+      input,
+      preview: tool.preview(input),
+      expectedVersions,
+      expiresAt: new Date(now.getTime() + 10 * 60_000).toISOString(),
+    });
+    const superseded = supersedeProposal(current, { reason: "human_amended", supersededByProposalId: replacement.id }, now);
+    await this.store.saveProposal(superseded);
+    await this.store.saveProposal(replacement);
+    return { proposal: replacement, supersededId: current.id };
   }
 
   async getJob(context: RequestContext, id: string) {

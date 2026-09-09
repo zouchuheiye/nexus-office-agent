@@ -11,6 +11,11 @@ export const confirmProposalSchema = z.object({
   proposalHash: z.string().regex(/^[a-f0-9]{64}$/),
 });
 
+export const amendProposalSchema = z.object({
+  proposalHash: z.string().regex(/^[a-f0-9]{64}$/),
+  input: z.unknown(),
+});
+
 export const controlAgentJobSchema = z.object({
   requestId: z.uuid(),
   action: z.enum(["cancel", "retry", "mark_succeeded", "mark_failed", "record_compensated"]),

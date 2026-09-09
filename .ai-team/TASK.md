@@ -23,7 +23,7 @@
 - [x] P2：验收通过/退回直连按钮——通过为轻确认（`decision=accept`），退回强制填原因（`reviewNote` ≥4 字，`decision=reject`）；服务端限定只有发布人/管理员能离开 `in_review`，执行人不可自我验收，AI 不能代为通过/退回。
 - [ ] P2：发起交接支持 AI 起草结构化交接单 + 可编辑预览卡，人逐字段修改后再确认发送（现为直连表单 + 交接链追溯，AI 起草预览卡待补齐）。
 - [x] P2：发布任务提供表单录入入口（任务栏“发布任务”按钮 + 表单对话框：使命标题/目标/优先级/截止 + 1..N 任务包：定向或开放承接、负责人/部门、说明/验收/技能/工期/容量点）；服务端复用 `POST /missions`（human），缺省字段仍标记“待补充”，口述走 AI 的既有通道保留。
-- [ ] P2：AI 起草的发布/交接提案卡升级为可编辑预览卡（逐字段修正后再确认）。
+- [ ] P2：AI 起草的发布/交接提案卡升级为可编辑预览卡（服务端 amend/supersede 底座已完成：`GET /agent/proposals/:id` + `POST /agent/proposals/:id/amend` 重新解析为新提案并作废旧提案；前端逐字段可编辑卡待接入）。
 - [ ] P3/P4/P5：子任务模型与 AI 勾选、通知链路、体验细节按产品后续排期推进（本任务不替代产品决策）。
 
 ## Invariants
@@ -49,6 +49,7 @@
 - P1 多身份：`development-context` 定义 4 个开发身份（manager/delivery/product/operations），提供 `GET/POST /auth/development-identities[/switch]`；resolve-request-context 从签名 Cookie 反查身份，workspace-bootstrap 内存仓储按身份返回展示名。
 - office-shell 增加开发验证身份切换器：切换后重签会话 Cookie、重置并重建主对话与任务栏上下文（WorkCommandCenter 按 actorId 重挂载），同身份重复切换守卫修正；身份列表仅在服务端开放时显示。
 - P2 首批：任务栏“提交验收”改为直连按钮 + 证据对话框（复用既有证据或新增 URL/文档 ID），不再把 130+ 字指令注入对话；发布人“已发布/我的”视图中 in_review 任务提供“验收通过/退回”直连按钮（通过轻确认；退回对话框强制填原因）。
+- P2 服务端 amend 底座：proposal 域新增 `supersedeProposal`（作废 pending 提案，reason=human_amended，记录被替代提案 ID）；orchestrator 新增 `amendProposal`（校验 actor/hash/pending、工具 schema 重新解析、无变更拒绝 `PROPOSAL_AMEND_NO_CHANGE`、版本漂移拦截、生成新提案并作废旧提案）；新增 `GET /agent/proposals/:id` 与 `POST /agent/proposals/:id/amend`，API 错误文案映射。单元 + 集成测试覆盖作废、防篡改、防空转、仅新提案可确认、非本人不可改。docs/08 契约同步。
 - P2 发布任务表单入口：任务栏新增“发布任务”按钮与表单对话框（使命标题/目标/优先级/截止 + 1..N 任务包），POST 到既有 `/missions`（source=human）；直派/开放承接、负责人/部门选择复用 workspace people/orgUnits；缺省任务说明/验收/技能仍由服务端标记“待补充”，不阻断录入。新增 API 集成测试覆盖表单 payload 混合直派+开放包与“待补充”标记。
 - P2 服务端边界：`transitionPackageSchema` 增补 `reviewNote`；从 `in_review` 离开到 `completed`（decision=accept）或退回 `in_progress`（decision=reject + reviewNote）只允许发布人或管理员，执行人自我验收返回 `POLICY_DENIED:work_task:review_decision`，退回无原因返回 `WORK_REVIEW_RETURN_REASON_REQUIRED`；决定与原因进入 `package_status_changed` 事件 payload。
 - 新增开发身份 API 集成测试（列表/生产关闭/缺密钥/未知 key/轮换签名/跨租户伪造拒绝）与“切换后 bootstrap/board 解析为周然”的 P1 端到端覆盖；新增 P2 验收流转单测（执行人不可自我验收、发布人退回带原因入事件链、再提交后通过 decision=accept）；新增 F-086/P0 导出过滤测试。

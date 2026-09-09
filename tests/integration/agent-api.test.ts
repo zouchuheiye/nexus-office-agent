@@ -2,12 +2,21 @@
 import { describe, expect, it } from "vitest";
 import { POST as createRun } from "@/app/api/v1/agent/runs/route";
 import { POST as controlAgentJob } from "@/app/api/v1/agent/jobs/[id]/control/route";
+import { POST as amendProposal } from "@/app/api/v1/agent/proposals/[id]/amend/route";
+import { GET as getProposal } from "@/app/api/v1/agent/proposals/[id]/route";
 
 function request(url: string, body: unknown) {
   return new Request(url, {
     method: "POST",
     headers: { "content-type": "application/json", "x-trace-id": "agent-api-test" },
     body: JSON.stringify(body),
+  });
+}
+
+function getRequest(url: string) {
+  return new Request(url, {
+    method: "GET",
+    headers: { "x-trace-id": "agent-api-test" },
   });
 }
 
@@ -58,5 +67,15 @@ describe("Agent HTTP API", () => {
     );
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ error: { code: "AGENT_JOB_NOT_FOUND" } });
+  });
+
+  it("P2: proposal detail is only readable by its actor and amend is scoped to real pending proposals", async () => {
+    const proposalId = "87000000-0000-4000-8000-000000000001";
+    const notFound = await getProposal(getRequest(`http://localhost/api/v1/agent/proposals/${proposalId}`), { params: Promise.resolve({ id: proposalId }) });
+    expect(notFound.status).toBe(404);
+    const amendMissing = await amendProposal(request(`http://localhost/api/v1/agent/proposals/${proposalId}/amend`, { proposalHash: "a".repeat(64), input: { title: "修正" } }), { params: Promise.resolve({ id: proposalId }) });
+    expect(amendMissing.status).toBe(404);
+    const malformed = await amendProposal(request(`http://localhost/api/v1/agent/proposals/${proposalId}/amend`, { input: {} }), { params: Promise.resolve({ id: proposalId }) });
+    expect(malformed.status).toBe(422);
   });
 });

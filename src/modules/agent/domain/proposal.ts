@@ -44,6 +44,14 @@ function canonicalize(value: unknown): string {
   return JSON.stringify(value);
 }
 
+export function canonicalizeProposalInput(value: unknown): string {
+  return canonicalize(value);
+}
+
+export function proposalInputDigest(value: unknown): string {
+  return sha256(canonicalize(value));
+}
+
 export function createProposal(input: Omit<AgentProposal, "id" | "inputDigest" | "proposalHash" | "status" | "createdAt">): AgentProposal {
   const createdAt = new Date().toISOString();
   const inputDigest = sha256(canonicalize(input.input));
@@ -80,5 +88,19 @@ export function approveProposal(proposal: AgentProposal, actorId: string, provid
       requestedBy: actorId, proposalHash: proposal.proposalHash, riskLevel: proposal.riskLevel,
       status: "approved", expiresAt: proposal.expiresAt, decidedAt, decidedBy: actorId, createdAt: decidedAt,
     },
+  };
+}
+
+/**
+ * P2 可编辑预览卡：R3 提案保持不可篡改，不原地修改 input；
+ * 人修正字段后调用 supersedeProposal 把旧提案作废（revoked），
+ * 再生成一份携带修正后 input 的新提案供再次确认。
+ */
+export function supersedeProposal(proposal: AgentProposal, input: { reason: string; supersededByProposalId?: string }, now = new Date()): AgentProposal {
+  if (proposal.status !== "pending") throw new Error(`PROPOSAL_NOT_SUPERSEDABLE:${proposal.status}`);
+  return {
+    ...proposal,
+    status: "revoked",
+    result: { supersededAt: now.toISOString(), reason: input.reason, supersededByProposalId: input.supersededByProposalId },
   };
 }

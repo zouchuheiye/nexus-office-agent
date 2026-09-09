@@ -186,3 +186,47 @@ describe("proposal integrity", () => {
     expect(() => approveProposal({ ...proposal, input: { value: 2 } }, "actor", proposal.proposalHash, new Date("2025-01-01T00:00:00Z"))).toThrow("PROPOSAL_INTEGRITY_VIOLATION");
   });
 });
+
+describe("P2 amendable proposal preview", () => {
+  it("supersedes an AI draft with corrected input and only the new proposal is confirmable", async () => {
+    const { orchestrator, store } = fixture(riskCallingModel("验收人未确认（待修正）"));
+    const context = createDevelopmentRequestContext("agent-amend");
+    const run = await orchestrator.createRun(context, { message: "登记风险：验收人未确认（待修正）" });
+    expect(run.status).toBe("awaiting_confirmation");
+    const original = await orchestrator.getProposal(context, run.output!.proposalId!);
+    const originalInput = original.input as { title: string };
+
+    const amended = await orchestrator.amendProposal(context, original.id, original.proposalHash, {
+      ...originalInput,
+      title: "验收人已确认（人工修正）",
+    });
+    expect(amended.proposal.id).not.toBe(original.id);
+    expect(amended.proposal.proposalHash).not.toBe(original.proposalHash);
+    expect(amended.proposal.status).toBe("pending");
+    expect(amended.proposal.preview).toContain("验收人已确认");
+    expect(amended.supersededId).toBe(original.id);
+
+    // 旧提案已作废，不能再确认；篡改 hash 也会被拒绝
+    const superseded = await store.getProposal(context.tenantId, original.id);
+    expect(superseded?.status).toBe("revoked");
+    await expect(orchestrator.confirmProposal(context, original.id, original.proposalHash)).rejects.toThrow("PROPOSAL_NOT_CONFIRMABLE:revoked");
+    await expect(orchestrator.amendProposal(context, original.id, "0".repeat(64), originalInput)).rejects.toThrow("CONFIRMATION_HASH_MISMATCH");
+
+    // 无实际变更时拒绝空转；新提案可正常确认且只排入一次
+    await expect(orchestrator.amendProposal(context, amended.proposal.id, amended.proposal.proposalHash, amended.proposal.input)).rejects.toThrow("PROPOSAL_AMEND_NO_CHANGE");
+    const confirmed = await orchestrator.confirmProposal(context, amended.proposal.id, amended.proposal.proposalHash);
+    expect(confirmed.run.status).toBe("queued");
+    expect([...store.toolCalls.values()][0]).toMatchObject({ status: "queued", inputDigest: amended.proposal.inputDigest });
+    expect(store.proposals.get(`${context.tenantId}:${original.id}`)?.status).toBe("revoked");
+  });
+
+  it("blocks amending a proposal that is not owned by the caller", async () => {
+    const { orchestrator } = fixture(riskCallingModel("他人提案不可改"));
+    const owner = createDevelopmentRequestContext("amend-owner");
+    const run = await orchestrator.createRun(owner, { message: "登记风险：他人提案不可改" });
+    const original = await orchestrator.getProposal(owner, run.output!.proposalId!);
+    const outsider = createDevelopmentRequestContext("amend-outsider");
+    outsider.actorId = "another-actor";
+    await expect(orchestrator.amendProposal(outsider, original.id, original.proposalHash, original.input)).rejects.toThrow("PROPOSAL_NOT_FOUND");
+  });
+});
