@@ -1,7 +1,6 @@
 // Requirements: PR-009, PR-010, PR-011, PR-012, MR-046, MR-047, MR-048, MR-049, MR-050, AR-011, SR-007, AC-012, AC-013
 import { describe, expect, it } from "vitest";
 import { GET as getWorkspace } from "@/app/api/v1/task-command/workspace/route";
-import { GET as getTimeline } from "@/app/api/v1/task-command/timeline/route";
 import { POST as publishMission } from "@/app/api/v1/task-command/missions/route";
 import { POST as claimTask } from "@/app/api/v1/task-command/packages/[id]/claim/route";
 import { POST as transitionTask } from "@/app/api/v1/task-command/packages/[id]/transition/route";
@@ -68,20 +67,9 @@ startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7,         priority: "medi
     );
     expect((await inProgress.json()).data.task).toMatchObject({ status: "in_progress", version: 3 });
 
-    const timeline = await getTimeline(request("http://localhost/api/v1/task-command/timeline?after=0&limit=2"));
-    expect(timeline.status).toBe(200);
-    const timelinePayload = await timeline.json();
-    expect(timelinePayload.meta.traceId).toBe("task-command-api-test");
-    expect(timelinePayload.data.events).toHaveLength(2);
-    expect(timelinePayload.data.events.map((item: { eventType: string }) => item.eventType)).toEqual(["mission_published", "package_published"]);
-    expect(timelinePayload.data.hasMore).toBe(true);
-    const next = await getTimeline(request(`http://localhost/api/v1/task-command/timeline?after=${timelinePayload.data.nextCursor}&limit=20`));
-    expect((await next.json()).data.events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ eventType: "package_claimed" }),
-      expect.objectContaining({ eventType: "package_status_changed" }),
-    ]));
-
-
+    const workspace = await getWorkspace(request("http://localhost/api/v1/task-command/workspace"));
+    const workspacePayload = await workspace.json();
+    expect(workspacePayload.data.myTasks).toEqual(expect.arrayContaining([expect.objectContaining({ id: task.id, status: "in_progress" })]));
   });
 
   it("publishes communication and feedback into a message pool without creating a task", async () => {

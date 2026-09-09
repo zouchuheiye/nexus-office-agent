@@ -104,9 +104,7 @@ flowchart LR
 
 所有表启用并强制 RLS，业务变更触发原子摘要审计。任务承接和状态更新在同一租户事务中以版本条件更新并追加事件，避免双重承接或“状态变了但事件丢失”。消息池不承担任务治理，但仍保留租户隔离、当前可见范围过滤和审计；其事件流只提示刷新，不含未授权正文。
 
-网页通过 `GET /api/v1/task-command/events` 建立 SSE。客户端可使用 `Last-Event-ID` 或 `after` 游标恢复；服务端每 55 秒主动关闭，浏览器自动重连。SSE 是状态变化提示，页面每次都重新读取权限化 workspace，不能把事件负载当成权威完整对象。
-
-全局任务时间线通过 `GET /api/v1/task-command/timeline?after=0&limit=50` 读取 `work_task_events` 的历史记录。服务端先执行当前租户、`work_task:read` 权限和任务/使命可见性过滤，再返回按 `sequence` 排序的事件页及 `nextCursor`；该接口不返回消息池事件或数据库审计事件。时间线视图以 `occurredAt` 展示时间，并以 `sequence` 作为同一时间戳的稳定顺序。
+网页通过 `GET /api/v1/task-command/events` 建立 SSE。客户端可使用 `Last-Event-ID` 或 `after` 游标恢复；服务端每 55 秒主动关闭，浏览器自动重连。SSE 是状态变化提示，页面每次都重新读取权限化 workspace，不能把事件负载当成权威完整对象。单任务卡内的折叠“时间线”通过 `GET /api/v1/task-command/packages/:id/timeline` 读取该任务的 `work_task_events` 流水。
 
 ### 4.1 任务进度页（只读）
 

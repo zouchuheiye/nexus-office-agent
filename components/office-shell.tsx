@@ -16,7 +16,6 @@ import {
   GitBranch,
   GitCommitHorizontal,
   Goal,
-  History,
   Kanban,
   Inbox,
   LayoutDashboard,
@@ -51,7 +50,6 @@ import { ManagementIntelligenceView } from "@/components/management-intelligence
 import { PwaLifecycle } from "@/components/pwa-lifecycle";
 import { WorkCommandCenter } from "@/components/work-command-center";
 import { TaskProgressBoard } from "@/components/task-progress-board";
-import { TaskTimeline } from "@/components/task-timeline";
 import { PiCodingWorkbench } from "@/components/pi-coding-workbench";
 import { PiGovernanceConsole } from "@/components/pi-governance-console";
 import { PiOperationsConsole } from "@/components/pi-operations-console";
@@ -144,7 +142,6 @@ const primaryNav: NavItem[] = [
   { id: "inbox", label: "统一收件箱", icon: Inbox },
   { id: "projects", label: "项目与任务", icon: BriefcaseBusiness },
   { id: "task-progress", label: "任务进度", icon: Kanban },
-  { id: "task-timeline", label: "任务时间线", icon: History },
   { id: "approvals", label: "智能审批", icon: FileCheck2 },
   { id: "people", label: "组织与人才", icon: Users },
   { id: "goals", label: "目标与绩效", icon: Goal },
@@ -543,7 +540,6 @@ export function OfficeShell() {
     />,
     projects: () => (selectedProjectId && identity ? <ManagementLoopView projectId={selectedProjectId} actorId={identity.actorId} onNotice={showNotice} /> : <ProjectRequiredState onReturn={() => chooseNav("today")} />),
     "task-progress": () => <TaskProgressBoard />,
-    "task-timeline": () => <TaskTimeline />,
     integrations: () => <IntegrationCenterView onNotice={showNotice} />,
     client: () => <ClientPlatformView onNotice={showNotice} />,
     "management-intelligence": () => <ManagementIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} />,
@@ -567,6 +563,11 @@ export function OfficeShell() {
           <span><strong>{identity?.tenantName ?? (bootstrapLoading ? "正在验证身份" : "工作区不可用")}</strong><small>{bootstrap?.dataMode === "development_fixture" ? "本地验证数据 · 非生产事实" : "企业工作区"}</small></span>
           {bootstrapLoading ? <LoaderCircle className="spin" size={14} /> : <ChevronDown size={14} />}
         </div>
+        {developmentIdentities.length ? <section className="development-identity-panel" aria-label="开发验证身份">
+          <div className="development-identity-head"><span><ShieldCheck size={13} />验证身份</span><b>{identity?.displayName ?? "选择演示身份"}</b></div>
+          <label className="development-identity-switch"><span>切换为谁查看</span><select aria-label="切换开发验证身份" value={identity?.actorId ?? ""} disabled={switchingIdentity} onChange={(event) => { const selected = developmentIdentities.find(({ actorId }) => actorId === event.target.value); if (selected) void switchDevelopmentIdentity(selected.key); }}>{developmentIdentities.map((item) => <option key={item.key} value={item.actorId}>{item.displayName}</option>)}</select></label>
+          <p className="development-identity-note">本地/内网验证用：切换后按所选身份重新加载任务与对话。</p>
+        </section> : null}
         <nav className="main-nav" aria-label="主导航">
           <p className="nav-caption">管理工作空间</p>
           {primaryNav.map((item) => {
@@ -579,7 +580,6 @@ export function OfficeShell() {
           <button className={active === "client" ? "active" : ""} onClick={() => chooseNav("client")}><Smartphone size={16} /><span>设备与客户端</span></button>
           <button className={active === "integrations" ? "active" : ""} onClick={() => chooseNav("integrations")}><Settings size={16} /><span>系统与集成</span></button>
           <div className="account-chip"><Avatar name={identity?.displayName ?? "用户"} /><span><strong>{identity?.displayName ?? "未认证用户"}</strong><small>{identity ? roleLabel(identity.roles) : "等待身份上下文"}</small></span></div>
-          {developmentIdentities.length ? <label className="development-identity-switch"><span>开发验证身份</span><select aria-label="切换开发验证身份" value={identity?.actorId ?? ""} disabled={switchingIdentity} onChange={(event) => { const selected = developmentIdentities.find(({ actorId }) => actorId === event.target.value); if (selected) void switchDevelopmentIdentity(selected.key); }}>{developmentIdentities.map((item) => <option key={item.key} value={item.actorId}>{item.displayName}</option>)}</select></label> : null}
         </div>
       </aside>
 
