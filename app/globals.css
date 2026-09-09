@@ -1633,6 +1633,16 @@ kbd { display: inline-flex; align-items: center; gap: 2px; padding: 3px 5px; col
 .work-dialog footer button { min-height: 32px; padding: 0 12px; color: var(--ink-2); background: var(--paper-raised); border: 1px solid var(--rule); border-radius: 7px; cursor: pointer; font-size: 10px; font-weight: 650; }
 .work-dialog footer button.primary { color: white; background: var(--command-live); border-color: var(--command-live); }
 .work-dialog-compact { width: min(420px, 100%); }
+.work-dialog-publish { width: min(760px, 100%); }
+.work-dialog-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.work-dialog-row label { min-width: 0; }
+.publish-package-list { display: grid; gap: 10px; }
+.publish-package-box { display: grid; gap: 10px; margin: 0; padding: 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--paper-muted); }
+.publish-package-box legend { padding: 0 6px; display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 10px; font-weight: 750; }
+.publish-package-box legend button { border: 0; background: transparent; color: var(--ink-3); cursor: pointer; font-size: 13px; line-height: 1; }
+.publish-add-package { justify-self: start; min-height: 30px; padding: 0 12px; color: var(--signal-hover); background: transparent; border: 1px dashed var(--rule); border-radius: 7px; cursor: pointer; font-size: 10px; font-weight: 650; }
+.task-publish-action { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 9px; color: var(--signal-hover); background: var(--paper-raised); border: 1px solid var(--rule); border-radius: 7px; cursor: pointer; font-size: 10px; font-weight: 700; }
+.task-publish-action:disabled { opacity: .55; cursor: default; }
 .task-progress-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 10px 2px; border-block: 1px solid var(--rule); }
 .task-progress-filters label { display: grid; gap: 4px; color: var(--ink-3); font-size: 9px; font-weight: 700; }
 .task-progress-filters select { min-width: 142px; min-height: 32px; padding: 0 8px; color: var(--ink-1); background: var(--paper-raised); border: 1px solid var(--rule); border-radius: 7px; font: inherit; }

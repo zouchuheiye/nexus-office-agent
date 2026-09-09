@@ -138,4 +138,34 @@ startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7,         priority: "medi
     const trail = await getHandoffTrail(request(`http://localhost/api/v1/task-command/packages/${task.id}/handoffs`), { params: Promise.resolve({ id: task.id }) });
     expect((await trail.json()).data.handoffs).toEqual([expect.objectContaining({ id: handoffPayload.data.handoff.id, artifactSnapshots: [expect.objectContaining({ artifactId, version: 1, contentDigest: "a".repeat(64) })] })]);
   });
+
+  it("P2: human publish form payload supports one mission with mixed direct and open-claim packages, marking omitted fields as 待补充", async () => {
+    const initial = await getWorkspace(request("http://localhost/api/v1/task-command/workspace"));
+    const conversationId = (await initial.json()).data.conversation.id as string;
+    const marker = crypto.randomUUID().slice(0, 8);
+    // Mirrors the web publish dialog: description/acceptance/skills can stay empty;
+    // requiredSkills is always sent (possibly []), and 待补充 markers are computed server-side.
+    const published = await publishMission(request("http://localhost/api/v1/task-command/missions", {
+      conversationId,
+      title: `表单发布 ${marker}`,
+      objective: `表单双通道 ${marker}`,
+      priority: "high",
+      packages: [
+        { title: `表单直派 ${marker}`, assignmentMode: "direct", assigneeId: DEMO_PRODUCT_OWNER_ID, priority: "high", dueAt: "2030-09-01T10:00:00.000Z", estimatedDays: 7, capacityPoints: 2 },
+        { title: `表单开放 ${marker}`, assignmentMode: "open_claim", priority: "medium", dueAt: "2030-09-01T10:00:00.000Z", estimatedDays: 5, capacityPoints: 1 },
+      ],
+    }));
+    expect(published.status).toBe(201);
+    const payload = await published.json();
+    const direct = payload.data.packages.find((item: { title: string }) => item.title.includes("直派"));
+    const openClaim = payload.data.packages.find((item: { title: string }) => item.title.includes("开放"));
+    expect(direct).toMatchObject({ status: "assigned", assigneeId: DEMO_PRODUCT_OWNER_ID, missingFields: expect.arrayContaining(["任务说明", "验收标准", "所需技能"]) });
+    expect(openClaim).toMatchObject({ status: "published", missingFields: expect.arrayContaining(["任务说明", "验收标准", "所需技能"]) });
+    const workspace = await getWorkspace(request("http://localhost/api/v1/task-command/workspace"));
+    const workspacePayload = await workspace.json();
+    expect(workspacePayload.data.publishedByMe).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: direct.id }),
+      expect.objectContaining({ id: openClaim.id }),
+    ]));
+  });
 });
