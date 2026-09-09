@@ -2,7 +2,7 @@
 
 - ID: `MVP-FIX`
 - Title: `枢纽任务管理 MVP 缺陷修复（P0–P5 计划执行）`
-- Status: `active`
+- Status: `handoff`
 - Owner: `MVP-FIX`
 - Next owner: `P01`
 
@@ -58,28 +58,25 @@
 
 ## Pending
 
-- P2 双通道补齐：提交验收与验收通过/退回已提供服务端边界 + 任务栏直连按钮；发布任务已提供表单入口（A2 缺口关闭）。剩余“发起交接的 AI 起草可编辑预览卡”与“AI 提案卡可编辑预览化”需要接入 Agent 提案确认链路，属中等工作量，不虚报已完成。
-- P3 子任务模型（work_package_tasks + 事件类型扩展 + AI 勾选建议）等待产品排期与数据库迁移清单确认。
-- P4 通知链路（分派/交接/验收主动通知与提醒脚本常驻调度）按产品后置排期。
-- P5 体验细节（文案人话化、空态引导、流式/阶段提示、一键重试）穿插在后续批次。
-- 浏览器端视觉验收（表格视图、身份切换器、发布任务/验收对话框、时间线移动端布局）仍需可用浏览器环境；本机未安装浏览器驱动。
+- P3/P4/P5 不在本批 MVP-FIX 交付范围：子任务模型（work_package_tasks + 事件类型扩展 + AI 勾选建议）、通知链路（分派/交接/验收主动通知与提醒脚本常驻调度）、体验细节（文案人话化、空态引导、流式/阶段提示、一键重试）按产品后续排期与文档第六节建议推进，本任务不替代产品决策。
+- 浏览器端视觉验收（表格视图、身份切换器、发布任务/验收/修正草稿对话框、时间线移动端布局）仍需可用浏览器环境；本机未安装浏览器驱动，已在 Verification 中如实标注。
 
 ## Next step
 
-当前为 MVP-FIX active。P0+P1、P2 首批（验收双通道）与发布任务表单入口已完成并通过全部门禁；下一批继续 P2：补“发起交接 AI 起草→可编辑预览卡”，并评估 AI 提案卡可编辑化的最小改造（与 Agent 提案确认链路对接）。
+P01 复核 MVP-FIX 的 P0/P1 快照与 P2 双通道交付（提交验收/验收通过退回/发起交接/发布任务 + 表单发布入口 + 可编辑提案预览卡）并决定合并；P3–P5 由产品按排期另行立项。
 
 ## Verification
 
 - [x] `npm run typecheck`：exit 0。
-- [x] `npm run lint`：exit 0。
-- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（提交快照对应 514 passed / 26 skipped）。
-- [x] P0 导出过滤单测、P1 身份切换集成测试、P2 验收流转单测（含 review_decision 边界与 reviewNote 事件审计）：通过。
-- [x] `node .ai-team/check.mjs --base <当前分支基座>`：Result: valid（提交前复核）。
-- [x] Next 生产构建 `npm run build`：exit 0（P0/P1 快照与 P2 首批改动均通过）。
-- [ ] 浏览器端视觉验收（表格视图/身份切换器/验收对话框/时间线移动端）：待有浏览器驱动的环境复核。
+- [x] `npm run lint`：exit 0（零警告）。
+- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（518 passed / 26 skipped）。
+- [x] P0 导出过滤单测、P1 身份切换集成测试、P2 验收流转单测（review_decision 边界 + reviewNote 事件审计）、P2 amend/supersede 单元与集成测试：通过。
+- [x] `node .ai-team/check.mjs`：Result: valid（functional 12/13，唯一未勾为 P3–P5 排期项）。
+- [x] Next 生产构建 `npm run build`：exit 0。
+- [ ] 浏览器端视觉验收（表格视图/身份切换器/发布任务/验收/修正草稿对话框/时间线移动端）：待有浏览器驱动的环境复核。
 
 ## Handoff note
 
 - From: `MVP-FIX`
 - To: `P01`
-- Summary: P0（任务表+进度表视图、单一 /board 数据源、筛选导出口径一致）与 P1（开发身份选人登录、按人隔离验证、生产失败关闭）已完成代码与测试，等待全部门禁复核并提交快照；P2 双通道动作与可编辑预览卡在同分支继续实现，P3–P5 按产品排期后置。
+- Summary: P0（任务表+进度表视图、单一 /board 数据源、筛选导出口径一致）、P1（开发身份选人登录、按人隔离验证、生产失败关闭）、P2（提交验收/验收通过退回双通道 + reviewNote 审计边界、发起交接直连/可编辑预览、发布任务表单入口 + AI 通道、R3 提案 amend/supersede 服务端与网页可编辑预览卡）已完成：typecheck、零警告 lint、全量 518 测试与生产构建通过，`.ai-team/TASK.md` functional 12/13，唯一未勾为按产品排期的 P3–P5 项；浏览器视觉验收待有驱动的环境复核。分支 `codex/pr5-task-iter` 自基线共 6 个提交（3ff66cc/109b755/be50da1/221ae2f/fe19e26/5e34451），工作树 clean。
