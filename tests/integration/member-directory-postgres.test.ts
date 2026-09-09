@@ -1,0 +1,99 @@
+// Requirements: SR-001, SR-002, SR-004, AC-003
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { PGlite } from "@electric-sql/pglite";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MemberDirectoryService } from "@/src/modules/organization/application/member-directory-service";
+import { PostgresMemberDirectoryRepository } from "@/src/modules/organization/infrastructure/postgres-member-directory-repository";
+import { TaskCommandService } from "@/src/modules/task-command/application/service";
+import { PostgresTaskCommandRepository } from "@/src/modules/task-command/infrastructure/postgres-repository";
+import type { DatabaseExecutor, TransactionalDatabase } from "@/src/platform/database/executor";
+import { createDevelopmentRequestContext, DEMO_MANAGER_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
+
+const DELIVERY_ORG_ID = "20000000-0000-4000-8000-000000000002";
+const DELIVERY_POSITION_ID = "50000000-0000-4000-8000-000000000002";
+
+const MIGRATIONS = ["0001_foundation.sql","0002_management_loop.sql","0003_agent_platform.sql","0004_connector_platform.sql","0005_workflow_knowledge.sql","0006_strategy_organization_talent.sql","0007_client_platform.sql","0008_security_hardening.sql","0009_atomic_audit.sql","0010_immutable_audit.sql","0011_enterprise_governance.sql","0012_enterprise_acceptance.sql","0013_connector_test_notifications.sql","0014_durable_runtime.sql","0015_agent_job_control.sql","0016_management_intelligence.sql","0017_work_command_center.sql","0018_work_message_pools.sql","0019_work_task_handoffs.sql","0023_work_artifact_evidence_chain.sql","0043_work_task_templates.sql","0045_work_task_progress_tracking.sql","0046_work_task_handoff_card.sql","0047_announcement_center.sql"];
+
+describe("Postgres member directory repository", () => {
+  let database: PGlite;
+  let directory: MemberDirectoryService;
+  let tasks: TaskCommandService;
+
+  beforeEach(async () => {
+    database = new PGlite();
+    for (const file of MIGRATIONS) await database.exec(await readFile(path.resolve("src/platform/database/migrations", file), "utf8"));
+    const executor: DatabaseExecutor = {
+      async query<T extends Record<string, unknown>>(sql: string, params: unknown[] = []) { return (await database.query<T>(sql, params as never[])).rows; },
+    };
+    const adapter: TransactionalDatabase = {
+      ...executor,
+      async withTenant<T>(tenantId: string, work: (scoped: DatabaseExecutor) => Promise<T>) {
+        await database.query("SELECT set_config('app.tenant_id',$1,false)", [tenantId]);
+        return work(executor);
+      },
+      async close() { await database.close(); },
+    };
+    directory = new MemberDirectoryService(new PostgresMemberDirectoryRepository(adapter));
+    tasks = new TaskCommandService(new PostgresTaskCommandRepository(adapter));
+    await database.query("INSERT INTO tenants(id,slug,name,status) VALUES($1,'demo','Demo','active')", [DEMO_TENANT_ID]);
+    await database.query("SELECT set_config('app.tenant_id',$1,false)", [DEMO_TENANT_ID]);
+    await database.query("INSERT INTO org_units(id,tenant_id,name,path,status,version) VALUES($1,$2,'交付中心','/交付中心','active',1)", [DELIVERY_ORG_ID, DEMO_TENANT_ID]);
+    await database.query("INSERT INTO positions(id,tenant_id,org_unit_id,code,name,status,version) VALUES($1,$2,$3,'delivery-head','交付负责人','active',1)", [DELIVERY_POSITION_ID, DEMO_TENANT_ID, DELIVERY_ORG_ID]);
+    await database.query("INSERT INTO users(id,tenant_id,display_name,email,status,version) VALUES($1,$2,'开发管理员','manager@example.test','active',1)", [DEMO_MANAGER_ID, DEMO_TENANT_ID]);
+  });
+
+  afterEach(async () => { await database.close(); });
+
+  it("persists a new member with RLS, reflects edits and soft-deactivates without deleting the row", async () => {
+    const manager = createDevelopmentRequestContext("pg-member-manager");
+    const created = await directory.createMember(manager, { displayName: "新员工乙", email: "h2@example.test", orgUnitId: DELIVERY_ORG_ID, positionId: DELIVERY_POSITION_ID });
+    expect(created).toMatchObject({ status: "active", orgUnitName: "交付中心", positionName: "交付负责人" });
+
+    const moved = await directory.updateMember(manager, created.id, { expectedVersion: 1, displayName: "新员工乙·改", isManager: true });
+    expect(moved).toMatchObject({ displayName: "新员工乙·改", isManager: true, version: 2 });
+
+    await expect(directory.createMember(manager, { displayName: "重名邮箱", email: "H2@example.test" })).rejects.toThrow("MEMBER_EMAIL_TAKEN");
+
+    const result = await directory.deactivateMember(manager, created.id, { expectedVersion: 2 });
+    expect(result.deactivatedMemberId).toBe(created.id);
+    expect((await directory.list(manager)).members.find(({ id }) => id === created.id)).toBeUndefined();
+
+    const retained = await database.query<{ status: string; archived_at: string | null }>("SELECT status,archived_at FROM users WHERE id=$1", [created.id]);
+    expect(retained.rows[0].status).toBe("departed");
+    expect(retained.rows[0].archived_at).not.toBeNull();
+  });
+
+  it("refuses deactivation while the member still holds an active package and keeps the task assignee intact", async () => {
+    const manager = createDevelopmentRequestContext("pg-member-guard");
+    const assignee = await directory.createMember(manager, { displayName: "进行中任务负责人", email: "busy@example.test", orgUnitId: DELIVERY_ORG_ID });
+    const conversation = (await tasks.workspace(manager)).conversation;
+    await tasks.publishMission(manager, {
+      conversationId: conversation.id,
+      title: "成员在职校验",
+      objective: "验证有进行中任务时不能停用成员。",
+      priority: "medium",
+      dueAt: "2030-09-01T10:00:00.000Z",
+      packages: [{ title: "分配中的任务", description: "仍在推进。", acceptanceCriteria: "完成。", requiredSkills: [], assignmentMode: "direct", assigneeId: assignee.id, priority: "medium", dueAt: "2030-08-30T10:00:00.000Z", startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7, capacityPoints: 2 }],
+    });
+    await expect(directory.deactivateMember(manager, assignee.id, { expectedVersion: assignee.version })).rejects.toThrow("MEMBER_HAS_ACTIVE_WORK");
+    const stillActive = await database.query<{ status: string }>("SELECT status FROM users WHERE id=$1", [assignee.id]);
+    expect(stillActive.rows[0].status).toBe("active");
+  });
+
+  it("enforces tenant isolation and records atomic audit on user/membership writes", async () => {
+    const manager = createDevelopmentRequestContext("pg-member-audit");
+    const created = await directory.createMember(manager, { displayName: "审计成员", email: "audit@example.test", orgUnitId: DELIVERY_ORG_ID });
+    await database.query("SELECT set_config('app.tenant_id',$1,false)", ["00000000-0000-4000-8000-000000000002"]);
+    await database.query("INSERT INTO tenants(id,slug,name,status) VALUES('00000000-0000-4000-8000-000000000002','b','Tenant B','active')");
+    await database.query("SELECT set_config('app.tenant_id',$1,false)", [DEMO_TENANT_ID]);
+    const listA = await directory.list(manager);
+    expect(listA.members.some(({ id }) => id === created.id)).toBe(true);
+
+    await database.query("SELECT set_config('app.tenant_id',$1,false)", ["00000000-0000-4000-8000-000000000002"]);
+    const audit = await database.query<{ resource_type: string }>(
+      "SELECT DISTINCT resource_type FROM audit_events WHERE resource_type IN ('users','memberships') ORDER BY resource_type",
+    );
+    expect(audit.rows.map(({ resource_type }) => resource_type)).toEqual(["memberships", "users"]);
+  });
+});

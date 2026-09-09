@@ -25,6 +25,7 @@
 - [x] P2：发布任务提供表单录入入口（任务栏“发布任务”按钮 + 表单对话框：使命标题/目标/优先级/截止 + 1..N 任务包：定向或开放承接、负责人/部门、说明/验收/技能/工期/容量点）；服务端复用 `POST /missions`（human），缺省字段仍标记“待补充”，口述走 AI 的既有通道保留。
 - [x] P2：AI 起草的提案卡升级为可编辑预览卡——服务端 amend/supersede（`GET/POST /api/v1/agent/proposals/:id[/amend]`）已实现并通过单元/集成测试；网页对话提案卡新增「修正草稿」：读取结构化输入、按字段编辑（标量/日期/字符串数组用输入框，嵌套结构用 JSON 子编辑器）、保存后旧提案作废、生成需再次确认的新提案。
 - [x] P3（第一批，按第六节推荐值）：任务包子任务拆分/勾选/重开/删除 + 进度 done/total + 验收门禁 + AI 只起草勾选建议（R3 确认）。
+- [x] 成员管理（员工目录，用户确认补入口）：并入“组织与人才”页，管理员（开发管理员，`organization_member:admin`）可新增成员、编辑姓名/邮箱/部门/岗位/是否负责人、软停用员工（设 users.status+archived_at、结束现行任职，不物理删、保留历史与审计）；`organization_member:read` 允许查看（各演示身份）。
 - [ ] P3（后续）/P4/P5：子任务证据附件上传、通知链路、体验细节按产品后续排期推进（本任务不替代产品决策）。
 
 ## Invariants
@@ -37,8 +38,9 @@
 
 ## Decisions
 
-- 按用户确认，本轮先收尾 P0（任务表+进度表视图）与 P1（多身份选人登录）为可提交里程碑，随后继续 P2 双通道补齐；P3 拆分/勾选按用户“全部按推荐执行”落地，P4/P5 记录为后续排期。
+- 按用户确认，本轮先收尾 P0（任务表+进度表视图）与 P1（多身份选人登录）为可提交里程碑，随后继续 P2 双通道补齐与 P3 子任务拆分/勾选；用户确认“成员管理”并入现有组织与人才页、管理员直改即时生效（软删除保留审计）、不改正式 IdP/授权语义（生产启用需另行预置权限，默认失败关闭）。
 - 第六节待确认决策点按文档建议值执行：子任务双方可拆（P3）、提交验收一键确认、验证版选人登录 + 正式 OIDC 后置、进度口径先用状态+剩余天数+逾期、4B 模型档位、验收证据先做字符串格式约束后补附件上传。
+- 成员管理属组织/员工主数据层（users/memberships/org_units/positions），由 0001 建表并强制 RLS、0009 原子审计兜底；任务工作区人员/负载与本目录同源，改动即时反映。
 - P3 六项决策均按推荐执行：双方可拆（含承接人，记拆分人）；AI 只起草勾选建议、R3 待人工确认；有子任务时必须全部完成才能 in_review；in_review/completed/cancelled 后禁止增删改子任务、退回 in_progress 恢复；子任务两态 pending/done（可选完成说明与可核验证据）；进度 = done/total。
 - 任务表/进度聚合的数据源统一收敛到 `/task-command/board`，避免页面口径与导出不一致；导出过滤参数（scope/status/overdueOnly）由 exportReportSchema 与导出路由同时承接。
 - P1 身份切换以签名会话 Cookie 承载，服务端按 actorId 反查白名单身份重建权限集；演示身份不复制正式权限语义。
@@ -63,26 +65,29 @@
 - P3 测试与验证：单测新增 6 个场景（双方可拆且旁观者拒绝、完成/重开与证据门禁、in_review 锁定、workspace 进度暴露、Agent 工具注册与确认策略、schema 证据格式）；Postgres 集成测试覆盖落库、CAS 冲突、进度聚合与锁定期；本地开发库应用 0048 后 workspace 接口恢复 200。
 - P3 HTTP 通道修复与回归：子任务 POST/PATCH 路由改为“先注入路径 packageId/subtaskId 再校验 body”（body 不再携带 id），并补 API 级路由测试（新增/勾选/列表/门禁/锁定全链路）；`applicationErrorResponse` 补 `_LOCKED` 类错误 → 409，保证 `WORK_PACKAGE_SUBTASKS_LOCKED` 不再落为 500。
 - P1 身份切换缺陷修复：开发管理员（manager）权限集约 140 项，签发到签名会话 Cookie 后接近 5KB、超过浏览器单 Cookie ~4KB 上限，浏览器静默丢弃新 Cookie 导致切回管理员后仍停留旧身份（如周然）。已改为会话 Cookie 只承载最小身份标识（tenantId/actorId/channel/sessionId），roles/permissions/dataScopes 不再内嵌（服务端本就按 actorId 从白名单/授权解析器每请求重建权限，Cookie 快照从不被信任）；开发切换与 OIDC 回调两条签发通道同时瘦身，manager Cookie 由 ~4.96KB 降至 ~343B，并补“超 4KB 亦可被浏览器覆盖”的回归测试。
+- 成员管理（员工目录）：`organization` 模块新增 member-directory 域（create/edit/deactivate 不变量）+ application service（`organization_member:read` 读、`organization_member:admin` 写；邮箱唯一/岗位归属部门/禁止停用自己/有进行中任务禁止停用）+ contracts/schemas；Postgres 与 InMemory 仓储（users/memberships/org_units/positions 读写，RLS+原子审计沿用）；runtime 与 HTTP 路由 `GET/POST /organization/members`、`PATCH/DELETE /organization/members/:id`；开发身份权限补 `organization_member:read/admin`（read 覆盖各演示身份）；`EnterpriseIntelligenceView` people 页并入“成员管理”卡片（目录列表 + 新增/编辑对话框 + 停用二次确认 + 仅管理员可见操作）；单测（域不变量、门禁、越权拒绝、自停用拦截）+ PGlite 集成（CRUD/RLS/审计/进行中任务保护/邮箱大小写唯一）。
 
 ## Pending
 
 - P3（后续）/P4/P5 不在本批 MVP-FIX 交付范围：子任务证据附件上传（决策点 6 补件）、通知链路（分派/交接/验收主动通知与提醒脚本常驻调度）、体验细节（文案人话化、空态引导、流式/阶段提示、一键重试）按产品后续排期与文档第六节建议推进，本任务不替代产品决策。
-- 浏览器端视觉验收（表格视图、身份切换器、发布任务/验收/修正草稿对话框、子任务面板、时间线移动端布局）仍需可用浏览器环境；本机未安装浏览器驱动，已在 Verification 中如实标注。
+- 成员管理正式化前置：`organization_member:admin/read` 目前只在开发白名单可用；正式环境需在 roles/permissions 预置对应权限与角色绑定（本次保持失败关闭），员工主数据仍以企业 IdP/授权目录为准。
+- 浏览器端视觉验收（表格视图、身份切换器、发布任务/验收/修正草稿对话框、子任务面板、成员管理卡片、时间线移动端布局）仍需可用浏览器环境；本机未安装浏览器驱动，已在 Verification 中如实标注。
 
 ## Next step
 
-P01 复核 MVP-FIX 的 P0/P1 快照、P2 双通道交付（提交验收/验收通过退回/发起交接/发布任务 + 表单发布入口 + 可编辑提案预览卡）与 P3 子任务拆分/勾选（全部按推荐决策执行）并决定合并；P3 证据附件与 P4/P5 由产品按排期另行立项。
+P01 复核 MVP-FIX 的 P0/P1 快照、P2 双通道交付（提交验收/验收通过退回/发起交接/发布任务 + 表单发布入口 + 可编辑提案预览卡）、P3 子任务拆分/勾选（全部按推荐决策执行）与成员管理页（组织与人才 · 管理员新增/编辑/软停用）并决定合并；P3 证据附件与 P4/P5 由产品按排期另行立项。
 
 ## Verification
 
 - [x] `npm run typecheck`：exit 0。
 - [x] `npm run lint`：exit 0（零警告）。
-- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（528 passed / 26 skipped）。
+- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（541 passed / 26 skipped）。
 - [x] P0 导出过滤单测、P1 身份切换集成测试、P2 验收流转单测（review_decision 边界 + reviewNote 事件审计）、P2 amend/supersede 单元与集成测试：通过。
 - [x] P3 单测（双方可拆且旁观者拒绝、完成/重开与证据门禁、in_review 锁定、workspace 进度暴露、Agent 工具注册与 R3 确认策略、schema 证据格式）与 Postgres 集成测试（落库、CAS 冲突、进度聚合、锁定期）：通过。
-- [x] `node .ai-team/check.mjs`：Result: valid（functional 13/14，唯一未勾为 P3 后续证据附件与 P4/P5 排期项）。
+- [x] 成员管理测试：域单测（创建/编辑/停用不变量与岗位归属校验）、服务单测（读门禁与 canManage、管理员增改停、越权拒绝、邮箱唯一、版本 CAS、禁止停用自己）、PGlite 集成（CRUD + RLS + users/memberships 审计 + 有进行中任务禁止停用 + 邮箱大小写不敏感唯一）：通过。
+- [x] `node .ai-team/check.mjs`：Result: valid（functional 14/15，唯一未勾为 P3 后续证据附件与 P4/P5 排期项）。
 - [x] Next 生产构建 `npm run build`：exit 0。
-- [ ] 浏览器端视觉验收（表格视图/身份切换器/发布任务/验收/修正草稿对话框/子任务面板/时间线移动端）：待有浏览器驱动的环境复核。
+- [ ] 浏览器端视觉验收（表格视图/身份切换器/发布任务/验收/修正草稿对话框/子任务面板/成员管理卡片/时间线移动端）：待有浏览器驱动的环境复核。
 
 ## Handoff note
 

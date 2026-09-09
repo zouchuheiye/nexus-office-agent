@@ -2,6 +2,7 @@
 
 import { Activity, ArrowRight, Bot, BriefcaseBusiness, CheckCircle2, Gauge, Goal, Network, RefreshCw, ShieldCheck, Target, UserRoundCheck, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { MemberDirectoryCard } from "@/components/member-directory-card";
 
 type MetricState = {
   metric: { id: string; name: string; unit: string; targetValue: number; sourceSystem: string };
@@ -116,6 +117,8 @@ export function EnterpriseIntelligenceView({ actorId, focus, onNotice }: { actor
         <div><p className="eyebrow">MANAGEMENT OPERATING SYSTEM</p><h1>{heading}</h1><p>把战略、指标、项目、责任和经营复盘连成同一条证据链；AI 只解释和准备，人对正式状态与人才结论负责。</p></div>
         <span><ShieldCheck size={15} />事实、推断、提案与决定分层展示</span>
       </header>
+
+      {focus === "people" ? <MemberDirectoryCard onNotice={onNotice} /> : null}
 
       <section className="enterprise-kpis">
         <div><Target size={18} /><span><strong>{workspace?.themes.length ?? "—"}</strong><small>有效战略主题</small></span></div>

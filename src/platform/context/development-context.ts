@@ -88,6 +88,8 @@ const DEVELOPMENT_PERMISSIONS = [
   "work_task:handoff_cross_department",
   "work_task:accept_handoff",
   "work_task:admin",
+  "organization_member:read",
+  "organization_member:admin",
   "message_pool:read",
   "message_pool:publish",
   "message_pool:moderate",
@@ -194,7 +196,7 @@ const DEVELOPMENT_IDENTITIES: readonly DevelopmentIdentity[] = [
     permissions: [
       "project:read", "objective:read", "risk:read", "task:read", "action_item:read",
       "work_task:read", "work_task:claim", "work_task:update", "work_task:handoff", "work_task:accept_handoff",
-      "message_pool:read", "memory:read", "client:bootstrap:read",
+      "organization_member:read", "message_pool:read", "memory:read", "client:bootstrap:read",
     ],
     dataScopes: [{ type: "tenant" }],
   },
@@ -206,7 +208,7 @@ const DEVELOPMENT_IDENTITIES: readonly DevelopmentIdentity[] = [
     permissions: [
       "project:read", "objective:read", "risk:read", "task:read", "action_item:read",
       "work_task:read", "work_task:claim", "work_task:update", "work_task:handoff", "work_task:accept_handoff",
-      "message_pool:read", "memory:read", "client:bootstrap:read",
+      "organization_member:read", "message_pool:read", "memory:read", "client:bootstrap:read",
     ],
     dataScopes: [{ type: "tenant" }],
   },
@@ -218,7 +220,7 @@ const DEVELOPMENT_IDENTITIES: readonly DevelopmentIdentity[] = [
     permissions: [
       "project:read", "objective:read", "risk:read", "task:read", "action_item:read",
       "work_task:read", "work_task:claim", "work_task:update", "work_task:handoff", "work_task:accept_handoff",
-      "message_pool:read", "memory:read", "client:bootstrap:read",
+      "organization_member:read", "message_pool:read", "memory:read", "client:bootstrap:read",
     ],
     dataScopes: [{ type: "tenant" }],
   },

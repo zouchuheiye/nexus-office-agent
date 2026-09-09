@@ -61,6 +61,7 @@ type RequestContext = {
 /task-command/packages/:id/timeline /task-command/handoffs/:id/response
 /task-command/packages/:id/subtasks /task-command/packages/:id/subtasks/:subtaskId
 /task-command/reports/export /task-command/events
+/organization/members /organization/members/:id
 /auth/development-identities /auth/development-identities/switch
 /admin/policies /admin/audit /admin/models
 ```
@@ -72,6 +73,8 @@ type RequestContext = {
 任务推进 `POST /packages/:id/transition` 是验收闭环的唯一写通道，接受 `expectedVersion/nextStatus`，并按目标状态要求 `evidenceRefs`、`blockedReason` 或验收退回原因 `reviewNote`。从 `in_review` 离开时只有发布人或管理员能决定 `completed`（通过，payload 记 `decision=accept`）或退回 `in_progress`（payload 记 `decision=reject` 与 `reviewNote`，退回原因至少 4 字）；执行人不可自我验收，AI 只能起草意见、不能代为通过/退回。
 
 任务包子任务（P3）：`GET /packages/:id/subtasks` 只读列出子任务与进度 `{done,total}`；`POST /packages/:id/subtasks` 新增（发布人/承接人/管理员可拆，`title` 2–160 字，每条记 `createdBy`）；`PATCH /packages/:id/subtasks/:subtaskId` 勾选 `done=true`（可带完成说明 `note` 与可核验 `evidenceRefs`，证据格式同任务验收）或重新打开 `done=false`；`DELETE /packages/:id/subtasks/:subtaskId?expectedVersion=` 删除。三条写操作都要求子任务版本 CAS（冲突返回 `409 WORK_PACKAGE_SUBTASK_CONFLICT`），并把 `package_progress_updated` 事件（payload `action` 为 `subtask_created/subtask_completed/subtask_reopened/subtask_deleted`）追加进任务事件链。锁定期规则：任务进入 `in_review/completed/cancelled` 后禁止新增/勾选/删除子任务（`409 WORK_PACKAGE_SUBTASKS_LOCKED`），发布人退回 `in_progress` 后恢复；若任务已拆分且存在未完成子任务，`in_progress → in_review` 被拦截（`409 WORK_PACKAGE_SUBTASKS_PENDING:done/total`）。子任务写通道同样只对负责人/发布人开放，AI 经 `work.add_package_subtask`/`work.update_package_subtask` 只能生成 R3 待确认提案、不能直接改状态。
+
+成员管理（员工目录）：`GET /organization/members` 返回在职成员目录（成员+部门+岗位+状态+邮箱）与可选部门/岗位（`orgUnits`/`positions`）以及当前主体是否可管理（`canManage`），读取需 `organization_member:read`；`POST /organization/members` 新增成员（`displayName`、可选 `email/orgUnitId/positionId/isManager`）；`PATCH /organization/members/:id` 按 `expectedVersion` 编辑资料/任职；`DELETE /organization/members/:id?expectedVersion=` 软停用（不物理删，保留 users 行、历史任务与审计）。写操作需 `organization_member:admin`（开发白名单仅管理员持有；正式环境由授权解析器预置）。邮箱同租户唯一（`MEMBER_EMAIL_TAKEN`）、岗位必须属于所选部门（`MEMBER_POSITION_ORG_MISMATCH`）、旧版本写入（`MEMBER_VERSION_CONFLICT`）、不能停用自己（`MEMBER_SELF_DEACTIVATE_DENIED`）、仍有进行中任务的成员不能停用（`MEMBER_HAS_ACTIVE_WORK`，需先完成或交接）。写入 users/memberships 由 0001 RLS 与 0009 原子审计触发器兜底，变更即时反映到任务工作区的人员/负载与授权解析。
 
 R3 提案（可编辑预览卡）：`GET /agent/proposals/:id` 返回本人可见的提案结构（含工具输入）；`POST /agent/proposals/:id/amend`（`proposalHash + input`）把人修正后的输入重新解析为一份新提案，并把原提案作废为 `revoked`——R3 提案本身不可篡改，只有新提案可被确认执行。无实际变更返回 `409 PROPOSAL_AMEND_NO_CHANGE`，非本人或非 pending 提案无法 amend，版本漂移在 amend 时同样拦截。
 
