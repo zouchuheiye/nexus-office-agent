@@ -827,6 +827,37 @@ kbd { display: inline-flex; align-items: center; gap: 2px; padding: 3px 5px; col
 .command-box > button:not(.command-scrim) strong { font-size: 10px; }
 .command-box > button:not(.command-scrim) small { margin-top: 3px; color: var(--ink-tertiary); font-size: 8px; }
 .command-box > button:not(.command-scrim) > svg:last-child { color: var(--ink-faint); }
+
+/* P2 amendable proposal preview */
+.command-box-amend { display: grid; gap: 10px; width: min(760px, calc(100vw - 32px)); max-height: min(82vh, 820px); padding: 14px; }
+.command-box-amend .command-input { height: auto; align-items: flex-start; border: 0; }
+.command-box-amend .command-input h2 { margin: 2px 0 4px; font: 700 19px/1.15 var(--font-display); }
+.command-box-amend .command-input p { margin: 0; color: var(--ink-2); font-size: 10px; line-height: 1.55; }
+.command-box-amend .icon-button { margin-left: auto; }
+.command-box-scroll { overflow: auto; max-height: 46vh; border: 1px solid var(--rule); border-radius: 9px; background: var(--paper-muted); }
+.command-box-scroll .work-dialog-json-editor, .command-box-scroll .work-dialog-json-group { display: grid; gap: 8px; padding: 12px; }
+.command-box-scroll .work-dialog-json-group > label { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 8px; align-items: start; }
+.command-box-scroll label > span { color: var(--ink-2); font-size: 10px; font-weight: 700; padding-top: 8px; }
+.command-box-scroll input[type="text"], .command-box-scroll input[type="number"], .command-box-scroll input[type="datetime-local"], .command-box-scroll textarea, .work-dialog-json-sub textarea { width: 100%; box-sizing: border-box; padding: 7px 8px; color: var(--ink); background: var(--paper-raised); border: 1px solid var(--rule); border-radius: 6px; font: inherit; font-size: 10px; }
+.command-box-scroll textarea { resize: vertical; min-height: 46px; }
+.command-box-scroll input[type="checkbox"] { justify-self: start; margin-top: 8px; }
+.work-dialog-json-sub { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper-raised); }
+.work-dialog-json-sub summary { color: var(--ink-2); cursor: pointer; font-size: 10px; font-weight: 700; }
+.work-dialog-json-error { color: var(--cinnabar); margin: 0; font-size: 10px; }
+.command-box-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.command-box-actions button { min-height: 32px; padding: 0 14px; color: var(--ink-2); background: var(--paper-raised); border: 1px solid var(--rule); border-radius: 7px; cursor: pointer; font-size: 10px; font-weight: 650; }
+.command-box-actions button.primary { color: white; background: var(--command-live); border-color: var(--command-live); }
+.command-box-actions button:disabled { opacity: .55; cursor: default; }
+.amend-preview { padding: 8px 10px; border-left: 3px solid var(--signal); background: var(--signal-wash); border-radius: 6px; }
+.amend-preview strong { display: block; color: var(--ink-2); font-size: 9px; letter-spacing: .05em; }
+.amend-preview small { color: var(--ink-1); font-size: 11px; line-height: 1.5; }
+.agent-proposal-card footer { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.agent-proposal-card footer button { min-height: 28px; padding: 0 10px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper-raised); color: var(--ink-2); cursor: pointer; font-size: 10px; font-weight: 650; }
+.agent-proposal-card footer button:last-child { color: white; background: var(--command-live); border-color: var(--command-live); }
+.agent-proposal-card footer button:disabled { opacity: .55; cursor: default; }
+.command-proposal footer { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.command-proposal footer button { min-height: 30px; padding: 0 12px; border: 1px solid var(--rule); border-radius: 7px; background: var(--paper-raised); color: var(--ink-2); cursor: pointer; font-size: 10px; font-weight: 650; }
+.command-proposal footer button:last-child { color: white; background: var(--command-live); border-color: var(--command-live); }
 .toast { position: fixed; left: 50%; bottom: 24px; z-index: 110; display: flex; align-items: center; gap: 8px; padding: 10px 14px; color: white; background: var(--ink); border-radius: 7px; transform: translateX(-50%); font-size: 10px; box-shadow: 0 8px 24px oklch(10% 0.02 252 / .16); animation: toast-in 220ms var(--ease); }
 .toast svg { color: oklch(80% 0.1 153); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }

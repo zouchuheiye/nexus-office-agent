@@ -56,6 +56,7 @@ import { PiCodingWorkbench } from "@/components/pi-coding-workbench";
 import { PiGovernanceConsole } from "@/components/pi-governance-console";
 import { PiOperationsConsole } from "@/components/pi-operations-console";
 import { AgentDevelopmentWorkflow } from "@/components/agent-development-workflow";
+import { ProposalAmendEditor } from "@/components/proposal-amend-editor";
 
 type NavItem = { id: string; label: string; icon: LucideIcon };
 type WorkspaceProject = {
@@ -102,6 +103,7 @@ type ManagementSnapshot = {
 };
 type AgentCitation = { id: string; label: string; excerpt: string; objectType: string };
 type AgentProposal = { id: string; proposalHash: string; preview: string; riskLevel: number; expiresAt: string; status: string };
+type AgentProposalDetail = AgentProposal & { toolId: string; toolVersion: number; input: unknown };
 type AgentJob = {
   id: string;
   status: "queued" | "executing" | "retry_scheduled" | "succeeded" | "failed" | "unknown" | "dead_letter" | "cancelled" | "compensated";
@@ -211,9 +213,11 @@ export function OfficeShell() {
   const [isThinking, setIsThinking] = useState(false);
   const [confirmingProposal, setConfirmingProposal] = useState("");
   const [notice, setNotice] = useState("");
+  const [amendDraftOpen, setAmendDraftOpen] = useState(false);
+  const [amendDraftBusy, setAmendDraftBusy] = useState(false);
+  const [amendTarget, setAmendTarget] = useState<{ proposal: AgentProposal; inputJson: string; toolLabel: string } | null>(null);
   const [developmentIdentities, setDevelopmentIdentities] = useState<Array<{ key: string; actorId: string; displayName: string; roles: string[] }>>([]);
-  const [switchingIdentity, setSwitchingIdentity] = useState(false);
-  const [bootstrap, setBootstrap] = useState<WorkspaceBootstrap | null>(null);
+  const [switchingIdentity, setSwitchingIdentity] = useState(false);  const [bootstrap, setBootstrap] = useState<WorkspaceBootstrap | null>(null);
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
   const [bootstrapError, setBootstrapError] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -449,6 +453,57 @@ export function OfficeShell() {
     }
   }
 
+  async function openAmendDraft(proposal: AgentProposal) {
+    if (amendDraftOpen || amendDraftBusy) return;
+    setAmendDraftBusy(true);
+    try {
+      const detail = await readApi<{ proposal: AgentProposalDetail }>(`/api/v1/agent/proposals/${proposal.id}`, { cache: "no-store" });
+      setAmendTarget({
+        proposal,
+        inputJson: JSON.stringify(detail.proposal.input ?? {}, null, 2),
+        toolLabel: detail.proposal.toolId.replace(/^work\./, "任务 · ").replace(/^communication\./, "消息 · "),
+      });
+      setAmendDraftOpen(true);
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "读取提案草稿失败");
+    } finally {
+      setAmendDraftBusy(false);
+    }
+  }
+
+  async function submitAmendDraft() {
+    if (!amendTarget || amendDraftBusy) return;
+    let input: unknown;
+    try {
+      input = JSON.parse(amendTarget.inputJson);
+    } catch {
+      showNotice("草稿不是合法 JSON，请修正后再提交");
+      return;
+    }
+    setAmendDraftBusy(true);
+    try {
+      const response = await fetch(`/api/v1/agent/proposals/${amendTarget.proposal.id}/amend`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ proposalHash: amendTarget.proposal.proposalHash, input }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || "修正已被拒绝");
+      const replacement = payload.data.proposal as AgentProposal;
+      // 旧提案已作废；把对话中的提案卡替换成修正后的新提案，仍需再次确认才执行
+      setMessages((current) => current.map((message) => message.proposal?.id === amendTarget.proposal.id
+        ? { ...message, content: `${message.content}\n\n已按你的修正生成新提案（原提案已作废），请再次确认后执行。`, proposal: replacement }
+        : message));
+      showNotice("已生成修正后的提案，请再次确认执行");
+      setAmendDraftOpen(false);
+      setAmendTarget(null);
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "修正失败");
+    } finally {
+      setAmendDraftBusy(false);
+    }
+  }
+
   const identity = bootstrap?.identity;
 
   const viewRenderers: Record<string, () => ReactNode> = {
@@ -463,6 +518,7 @@ export function OfficeShell() {
         onQueryChange={setQuery}
         onSubmit={askAgent}
         onConfirmProposal={(proposal) => void confirmAgentProposal(proposal)}
+        onAmendProposal={(proposal) => void openAmendDraft(proposal)}
         onHydrate={hydratePrimaryConversation}
         onNotice={showNotice}
       />
@@ -551,7 +607,7 @@ export function OfficeShell() {
               {message.role === "assistant" ? <span className="message-layer">{message.job ? "执行状态" : message.proposal ? "待确认提案" : message.citations?.length ? "有依据回答" : "Agent 回答"}</span> : null}
               <p>{message.content}</p>
               {message.citations?.length ? <div className="message-citations"><span><ShieldCheck size={11} />可核验依据</span>{message.citations.slice(0, 4).map((citation, citationIndex) => <details key={citation.id}><summary><b>[{citationIndex + 1}]</b>{citation.label}</summary><small>{citation.excerpt}</small></details>)}</div> : null}
-              {message.proposal ? <div className="agent-proposal-card"><div><span>R{message.proposal.riskLevel} · 需要人工确认</span><b>{new Date(message.proposal.expiresAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 前有效</b></div><strong>Agent 操作提案</strong><small>{message.proposal.preview}</small><button disabled={confirmingProposal === message.proposal.id} onClick={() => void confirmAgentProposal(message.proposal!)}>{confirmingProposal === message.proposal.id ? "正在重新校验…" : "确认并排队"}<ArrowRight size={12} /></button></div> : null}
+              {message.proposal ? <div className="agent-proposal-card"><div><span>R{message.proposal.riskLevel} · 需要人工确认</span><b>{new Date(message.proposal.expiresAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 前有效</b></div><strong>Agent 操作提案</strong><small>{message.proposal.preview}</small><footer><button disabled={amendDraftBusy} onClick={() => void openAmendDraft(message.proposal!)}>修正草稿<ArrowRight size={12} /></button><button disabled={confirmingProposal === message.proposal.id} onClick={() => void confirmAgentProposal(message.proposal!)}>{confirmingProposal === message.proposal.id ? "正在重新校验…" : "确认并排队"}<ArrowRight size={12} /></button></footer></div> : null}
               {message.job ? <div className={`agent-job-card is-${message.job.status}`}><span><i />{jobStatusCopy[message.job.status]}</span><code>{message.job.id.slice(0, 8)}</code>{message.job.status === "unknown" ? <small>{message.job.unknownReason || "执行回执不确定，不能推断成功。"}</small> : message.job.errorCode ? <small>{message.job.errorCode}</small> : null}</div> : null}
             </div>
           </div>)}
@@ -563,6 +619,8 @@ export function OfficeShell() {
 
       {searchOpen ? <div className="command-layer" role="dialog" aria-modal="true" aria-label="全局搜索"><button className="command-scrim" aria-label="关闭搜索" onClick={() => setSearchOpen(false)} /><div className="command-box"><div className="command-input"><Search size={19} /><input autoFocus value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="搜索已授权项目…" /><kbd>ESC</kbd></div><p>{filteredProjects.length ? "可访问项目" : "没有匹配的可访问项目"}</p>{filteredProjects.map((project) => <button key={project.id} onClick={() => { setSelectedProjectId(project.id); chooseNav("projects"); setSearchOpen(false); setSearchTerm(""); }}><BriefcaseBusiness size={17} /><span><strong>{project.name}</strong><small>{project.code} · {project.health} · {project.targetEndAt}</small></span><ArrowRight size={15} /></button>)}<button onClick={() => { setSearchOpen(false); chooseNav("command"); setQuery("总结当前项目未闭环风险，并区分事实与推断"); }} disabled={!selectedProjectId}><WandSparkles size={17} /><span><strong>让 Agent 分析当前项目</strong><small>只使用当前身份可见上下文</small></span><ArrowRight size={15} /></button></div></div> : null}
       {notice ? <div className="toast"><CheckCircle2 size={17} /><span>{notice}</span></div> : null}
+
+      {amendDraftOpen && amendTarget ? <div className="command-layer" role="dialog" aria-modal="true" aria-label="修正提案草稿"><button className="command-scrim" aria-label="关闭" onClick={() => setAmendDraftOpen(false)} /><div className="command-box command-box-amend"><div className="command-input"><span className="command-kicker"><WandSparkles size={14} />AMEND PROPOSAL</span><h2>修正提案草稿</h2><p>{amendTarget.toolLabel} · 原提案 {amendTarget.proposal.id.slice(0, 8)}；保存后原提案作废并生成新提案，仍需再次确认才执行。</p><button className="icon-button" aria-label="关闭" onClick={() => setAmendDraftOpen(false)}>×</button></div><div className="amend-preview"><strong>预期动作</strong><small>{amendTarget.proposal.preview}</small></div><div className="command-box-scroll"><ProposalAmendEditor value={amendTarget.inputJson} onChange={(next) => setAmendTarget((current) => current ? { ...current, inputJson: next } : current)} /></div><div className="command-box-actions"><button type="button" onClick={() => setAmendDraftOpen(false)}>取消</button><button type="button" className="primary" disabled={amendDraftBusy} onClick={() => void submitAmendDraft()}>{amendDraftBusy ? "保存中…" : "保存并生成新提案"}<ArrowRight size={14} /></button></div></div></div> : null}
     </div>
   );
 }

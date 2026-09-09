@@ -79,6 +79,7 @@ export function WorkCommandCenter({
   onQueryChange,
   onSubmit,
   onConfirmProposal,
+  onAmendProposal,
   onHydrate,
   onNotice,
 }: {
@@ -89,6 +90,7 @@ export function WorkCommandCenter({
   onQueryChange: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
   onConfirmProposal: (proposal: NonNullable<DisplayMessage["proposal"]>) => void;
+  onAmendProposal: (proposal: NonNullable<DisplayMessage["proposal"]>) => void;
   onHydrate: (conversationId: string, messages: DisplayMessage[]) => void;
   onNotice: (message: string) => void;
 }) {
@@ -428,7 +430,7 @@ export function WorkCommandCenter({
               <p>{message.content}</p>
               {message.routing?.tools.length ? <details className="route-proof"><summary>已使用 {message.routing.tools.length} 项办公能力</summary><span>{message.routing.tools.join(" · ")}</span></details> : null}
               {message.citations?.length ? <div className="command-citations"><span><ShieldCheck size={12} />核验依据</span>{message.citations.slice(0, 5).map((citation, citationIndex) => <details key={citation.id}><summary><b>[{citationIndex + 1}]</b>{citation.label}</summary><small>{citation.excerpt}</small></details>)}</div> : null}
-              {message.proposal ? <div className="command-proposal"><div><span>R{message.proposal.riskLevel} · 人工确认</span><b>{new Date(message.proposal.expiresAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 前有效</b></div><strong>{message.proposal.preview}</strong><button disabled={confirmingProposal === message.proposal.id} onClick={() => onConfirmProposal(message.proposal!)}>{confirmingProposal === message.proposal.id ? "正在校验…" : "确认并执行"}<ArrowRight size={13} /></button></div> : null}
+              {message.proposal ? <div className="command-proposal"><div><span>R{message.proposal.riskLevel} · 人工确认</span><b>{new Date(message.proposal.expiresAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 前有效</b></div><strong>{message.proposal.preview}</strong><footer><button onClick={() => onAmendProposal(message.proposal!)}>修正草稿<ArrowRight size={13} /></button><button disabled={confirmingProposal === message.proposal.id} onClick={() => onConfirmProposal(message.proposal!)}>{confirmingProposal === message.proposal.id ? "正在校验…" : "确认并执行"}<ArrowRight size={13} /></button></footer></div> : null}
               {message.job ? <div className="command-job"><Radio size={13} /><span>{message.job.status}</span><code>{message.job.id.slice(0, 8)}</code></div> : null}
             </div>
           </article>)}
