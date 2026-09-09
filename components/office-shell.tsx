@@ -539,7 +539,7 @@ export function OfficeShell() {
       onConnect={() => chooseNav("integrations")}
     />,
     projects: () => (selectedProjectId && identity ? <ManagementLoopView projectId={selectedProjectId} actorId={identity.actorId} onNotice={showNotice} /> : <ProjectRequiredState onReturn={() => chooseNav("today")} />),
-    "task-progress": () => <TaskProgressBoard />,
+    "task-progress": () => <TaskProgressBoard projects={bootstrap?.projects ?? []} />,
     integrations: () => <IntegrationCenterView onNotice={showNotice} />,
     client: () => <ClientPlatformView onNotice={showNotice} />,
     "management-intelligence": () => <ManagementIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} />,

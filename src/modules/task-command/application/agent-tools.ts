@@ -79,13 +79,13 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
   });
   registry.register({
     id: "work.update_my_task", skillId: "work-orchestration", version: 1,
-    description: "推进当前用户负责或发布的任务包状态（不含取消）：开始、阻塞、提交验收、完成；完成时必须给出可核验的证据引用，阻塞时必须说明原因。取消任务请使用 work.cancel_task。",
+    description: "推进当前用户负责或发布的任务包状态（不含取消）：开始、阻塞、提交验收、完成；完成或提交验收时必须给出可核验证据引用——每个证据必须是 http(s) 链接或“类型:引用”格式（如 document:xxx、minutes:…、artifact:uuid），不能只写“已完成”等文字；阻塞时必须说明原因。取消任务请使用 work.cancel_task。",
     requiredPermissions: ["work_task:update"], riskLevel: 2, confirmationPolicy: "risk_based", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 3,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
     inputJsonSchema: { type: "object", additionalProperties: false, properties: {
       taskId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 },
       nextStatus: { type: "string", enum: ["in_progress", "blocked", "in_review", "completed"] },
-      evidenceRefs: { type: "array", items: { type: "string" } }, blockedReason: { type: "string" },
+      evidenceRefs: { type: "array", items: { type: "string", description: "http(s) 链接或 类型:引用，如 document:xxx / minutes:… / artifact:uuid" } }, blockedReason: { type: "string" },
     }, required: ["taskId", "expectedVersion", "nextStatus"] },
     inputSchema: updateSchema,
     preview(input) { const value = updateSchema.parse(input); return `将任务包 ${value.taskId} 推进为 ${value.nextStatus}。`; },

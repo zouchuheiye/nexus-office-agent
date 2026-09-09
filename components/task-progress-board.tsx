@@ -1,8 +1,65 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, CircleDashed, Clock, Download, LoaderCircle, RefreshCw, ShieldCheck } from "lucide-react";
 import { useTaskBoard, type BoardTask as Task } from "@/components/board-client";
+
+export type ProjectDirectoryEntry = { id: string; code: string; name: string; health: string; targetEndAt: string };
+
+type ProjectStat = {
+  id: string;
+  code: string;
+  name: string;
+  health: string;
+  milestoneTotal: number;
+  milestoneDone: number;
+  taskTotal: number;
+  taskActive: number;
+  taskReview: number;
+  taskDone: number;
+  generatedAt: string;
+  error: string;
+};
+
+function countStatus(list: Array<{ status: string }>, match: (status: string) => boolean): number {
+  return list.filter((item) => match(item.status)).length;
+}
+
+async function loadProjectStat(project: ProjectDirectoryEntry): Promise<ProjectStat> {
+  try {
+    const response = await fetch(`/api/v1/management/snapshot?projectId=${encodeURIComponent(project.id)}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error?.message || "项目快照读取失败");
+    const snapshot = payload.data as {
+      project: { health: string };
+      milestones: Array<{ status: string }>;
+      tasks: Array<{ status: string }>;
+      generatedAt: string;
+    };
+    const milestones = snapshot.milestones ?? [];
+    const tasks = snapshot.tasks ?? [];
+    const isDone = (status: string) => ["completed", "done", "closed"].includes(status);
+    const isActive = (status: string) => ["todo", "in_progress", "assigned", "blocked"].includes(status);
+    return {
+      id: project.id,
+      code: project.code,
+      name: project.name,
+      health: snapshot.project?.health ?? project.health,
+      milestoneTotal: milestones.length,
+      milestoneDone: countStatus(milestones, isDone),
+      taskTotal: tasks.length,
+      taskActive: countStatus(tasks, isActive),
+      taskReview: countStatus(tasks, (status) => status === "in_review"),
+      taskDone: countStatus(tasks, isDone),
+      generatedAt: snapshot.generatedAt ?? "",
+      error: "",
+    };
+  } catch (cause) {
+    return { id: project.id, code: project.code, name: project.name, health: project.health, milestoneTotal: 0, milestoneDone: 0, taskTotal: 0, taskActive: 0, taskReview: 0, taskDone: 0, generatedAt: "", error: cause instanceof Error ? cause.message : "项目快照读取失败" };
+  }
+}
+
+const healthCopy: Record<string, string> = { healthy: "健康", watch: "需关注", at_risk: "有风险", critical: "高风险", unknown: "待评估" };
 
 const priorityCopy = { critical: "紧急", high: "高", medium: "中", low: "低" } as const;
 const statusCopy: Record<Task["status"], string> = {
@@ -55,7 +112,7 @@ function aggregateTasks(tasks: Task[], nameOf: (task: Task) => string): Aggregat
   return [...groups.values()].sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
 }
 
-export function TaskProgressBoard() {
+export function TaskProgressBoard({ projects = [] }: { projects?: ProjectDirectoryEntry[] }) {
   const { board, loading, error, load } = useTaskBoard();
   const [scope, setScope] = useState<"all" | "mine" | "published">("all");
   const [view, setView] = useState<"board" | "table">("board");
@@ -63,6 +120,29 @@ export function TaskProgressBoard() {
   const [missionId, setMissionId] = useState("");
   const [status, setStatus] = useState("");
   const [overdueOnly, setOverdueOnly] = useState(false);
+  const [projectStats, setProjectStats] = useState<ProjectStat[] | null>(null);
+  const [projectStatsLoading, setProjectStatsLoading] = useState(false);
+  const [projectStatsError, setProjectStatsError] = useState("");
+
+  const loadProjectStats = useCallback(async () => {
+    if (!projects.length) return;
+    setProjectStatsLoading(true);
+    setProjectStatsError("");
+    try {
+      const stats = await Promise.all(projects.map((project) => loadProjectStat(project)));
+      setProjectStats(stats);
+    } catch (cause) {
+      setProjectStatsError(cause instanceof Error ? cause.message : "项目进度读取失败");
+    } finally {
+      setProjectStatsLoading(false);
+    }
+  }, [projects]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadProjectStats(), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadProjectStats]);
+  const refreshAll = useCallback(async () => { await Promise.allSettled([load(), loadProjectStats()]); }, [load, loadProjectStats]);
 
   const peopleById = useMemo(() => new Map(board?.people.map((person) => [person.id, person]) ?? []), [board]);
   const missionsById = useMemo(() => new Map(board?.missions.map((mission) => [mission.id, mission]) ?? []), [board]);
@@ -107,7 +187,7 @@ export function TaskProgressBoard() {
           {(["all", "mine", "published"] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={scope === item} className={scope === item ? "active" : ""} onClick={() => setScope(item)}>{item === "all" ? "全部" : item === "mine" ? "我负责" : "我发布"}{item === "all" ? <b>{board?.tasks.length ?? 0}</b> : null}</button>)}
         </div>
         <div className="task-progress-tabs" role="tablist" aria-label="任务视图"><button type="button" role="tab" aria-selected={view === "board"} className={view === "board" ? "active" : ""} onClick={() => setView("board")}>看板</button><button type="button" role="tab" aria-selected={view === "table"} className={view === "table" ? "active" : ""} onClick={() => setView("table")}>表格</button></div>
-        <button type="button" className="task-progress-refresh" onClick={() => void load()} aria-label="刷新看板"><RefreshCw className={loading ? "spin" : ""} size={15} />刷新</button>
+        <button type="button" className="task-progress-refresh" onClick={() => void refreshAll()} aria-label="刷新看板与项目进度"><RefreshCw className={loading || projectStatsLoading ? "spin" : ""} size={15} />刷新</button>
         <button type="button" className="task-progress-export" onClick={exportFiltered} aria-label="导出筛选后的报表"><Download size={15} />导出</button>
       </div>
     </header>
@@ -121,6 +201,13 @@ export function TaskProgressBoard() {
     </div>
 
     {board?.people?.length ? <div className="task-progress-people" aria-label="成员负载"><span className="task-progress-people-title">成员负载</span>{board.people.map((person) => <span key={person.id} className={`task-progress-person${person.inProgressTaskCount >= 5 || person.capacityPoints >= 20 ? " is-high" : ""}`}>{person.displayName}<i>{person.inProgressTaskCount} 进行 / {person.dueSoonTaskCount} 临期 / {person.capacityPoints} 点</i></span>)}</div> : null}
+
+    {projects.length ? <section className="project-health-strip" aria-label="项目进度（来自管理闭环快照）">
+      <header><span className="command-kicker"><ShieldCheck size={13} />PROJECT HEALTH</span><h2>项目进度</h2><p>健康度、里程碑与任务计数来自 management/snapshot 的项目闭环事实，与下方任务看板分开读取。</p></header>
+      {projectStatsLoading && !projectStats ? <div className="task-progress-state"><LoaderCircle className="spin" size={18} />正在读取项目闭环快照…</div>
+        : projectStatsError && !projectStats ? <div className="task-progress-state is-error"><AlertTriangle size={18} />{projectStatsError}</div>
+        : <div className="project-health-grid">{projectStats?.map((item) => <article className={`project-health-card is-${item.health}`} key={item.id}><div className="project-health-top"><span><b>{item.code}</b>{item.name}</span><i className="project-health-chip">{healthCopy[item.health] ?? item.health}</i></div>{item.error ? <p className="project-health-error">{item.error}</p> : <dl><div><dt>里程碑</dt><dd>{item.milestoneTotal ? `${item.milestoneDone}/${item.milestoneTotal} 完成` : "无"}</dd></div><div><dt>任务</dt><dd>{item.taskTotal} 项 · 进行 {item.taskActive} · 待验收 {item.taskReview} · 完成 {item.taskDone}</dd></div><div><dt>快照</dt><dd>{item.generatedAt ? formatDate(item.generatedAt) : "—"}</dd></div></dl>}</article>)}</div>}
+    </section> : null}
 
     {error && !board ? <div className="task-progress-state is-error"><AlertTriangle size={18} />{error}<button onClick={() => void load()}>重试</button></div> : !board ? <div className="task-progress-state"><LoaderCircle className="spin" size={18} />正在加载看板…</div> : <>
       <div className="task-progress-summary"><span>当前结果 <b>{tasks.length}</b></span><span>进行中 <b>{activeCount}</b></span><span>待验收 <b>{reviewCount}</b></span><span>已完成 <b>{completedCount}</b></span><span>逾期 <b>{overdueCount}</b></span></div>

@@ -1719,6 +1719,27 @@ kbd { display: inline-flex; align-items: center; gap: 2px; padding: 3px 5px; col
 .task-progress-person i { font-style: normal; color: var(--ink-3); font-weight: 500; }
 .task-progress-person.is-high { border-color: color-mix(in oklch, var(--amber) 60%, var(--rule)); color: var(--ink-1); }
 .task-progress-person.is-high i { color: var(--amber); }
+.project-health-strip { display: grid; gap: 10px; padding: 12px 2px; border-block: 1px solid var(--rule-subtle); }
+.project-health-strip header h2 { margin: 4px 0 0; font: 700 17px/1.2 var(--font-display); color: var(--ink); }
+.project-health-strip header p { max-width: 720px; margin: 4px 0 0; color: var(--ink-3); font-size: 10px; line-height: 1.6; }
+.project-health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.project-health-card { display: grid; gap: 10px; padding: 14px; background: var(--paper-raised); border: 1px solid var(--rule); border-left-width: 4px; border-radius: 10px; }
+.project-health-card.is-healthy { border-left-color: var(--success); }
+.project-health-card.is-watch { border-left-color: var(--amber); }
+.project-health-card.is-at_risk, .project-health-card.is-critical { border-left-color: var(--cinnabar); }
+.project-health-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.project-health-top span { min-width: 0; }
+.project-health-top b { display: block; overflow: hidden; color: var(--ink-1); font: 700 11px/1.2 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.project-health-top span { color: var(--ink-2); font-size: 10px; }
+.project-health-chip { padding: 4px 8px; border-radius: 999px; font-size: 9px; font-style: normal; font-weight: 700; white-space: nowrap; }
+.project-health-card.is-healthy .project-health-chip { color: var(--success); background: var(--success-wash); }
+.project-health-card.is-watch .project-health-chip { color: #a8741a; background: var(--amber-wash); }
+.project-health-card.is-at_risk .project-health-chip, .project-health-card.is-critical .project-health-chip { color: var(--cinnabar); background: var(--cinnabar-wash); }
+.project-health-card dl { display: grid; gap: 6px; margin: 0; }
+.project-health-card dl > div { display: flex; justify-content: space-between; gap: 10px; font-size: 10px; }
+.project-health-card dt { color: var(--ink-3); }
+.project-health-card dd { margin: 0; color: var(--ink-1); font-weight: 650; text-align: right; }
+.project-health-error { margin: 0; color: var(--cinnabar); font-size: 10px; }
 .task-progress-board { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 12px; align-items: start; }
 .task-progress-column { display: grid; gap: 8px; min-width: 0; }
 .task-progress-column > header { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 4px; color: var(--ink-3); font-size: 10px; font-weight: 700; letter-spacing: .06em; }

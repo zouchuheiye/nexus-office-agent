@@ -1,6 +1,7 @@
 // Requirements: PR-009, PR-010, PR-012, MR-046, MR-047, MR-048, MR-049, MR-050, AR-011, SR-007, AC-012, AC-013
 import { describe, expect, it } from "vitest";
 import { TaskCommandService } from "@/src/modules/task-command/application/service";
+import { transitionPackageSchema } from "@/src/modules/task-command/application/schemas";
 import { DEMO_DELIVERY_OWNER_ID, DEMO_OPERATIONS_OWNER_ID, DEMO_PRODUCT_ORG_ID, DEMO_PRODUCT_OWNER_ID, InMemoryTaskCommandRepository } from "@/src/modules/task-command/infrastructure/in-memory-repository";
 import { createDevelopmentRequestContext, DEMO_MANAGER_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
 import { createMissionBundle, createTaskTemplateBundle } from "@/src/modules/task-command/domain/task-command";
@@ -338,5 +339,28 @@ describe("real-time task command domain", () => {
     expect(board.tasks.length).toBeGreaterThanOrEqual(2);
     expect(board.tasks.some(({ title }) => title === "看板模板")).toBe(false);
     expect(board.tasks.every(({ dueState }) => ["overdue", "due_soon", "normal", "done"].includes(dueState ?? "normal"))).toBe(true);
+  });
+});
+
+describe("A4/P2 evidence reference format gate", () => {
+  it("accepts http links and typed document/record references", () => {
+    const transition = transitionPackageSchema.safeParse({
+      expectedVersion: 1, nextStatus: "in_review",
+      evidenceRefs: [
+        "https://example.test/acceptance/2026-w32.pdf",
+        "document:delivery-evidence",
+        "minutes:weekly-ops:2026-W32",
+        "artifact:10000000-0000-4000-8000-000000000001",
+        "test-run:regression-32",
+      ],
+    });
+    expect(transition.success).toBe(true);
+  });
+
+  it("rejects free-text evidence that cannot be verified", () => {
+    for (const bad of ["已完成", "证据见会议纪要", "done by qa", "我完成了，请验收"]) {
+      const transition = transitionPackageSchema.safeParse({ expectedVersion: 1, nextStatus: "in_review", evidenceRefs: [bad] });
+      expect(transition.success, `should reject: ${bad}`).toBe(false);
+    }
   });
 });

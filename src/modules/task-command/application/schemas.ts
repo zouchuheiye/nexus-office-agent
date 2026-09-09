@@ -5,6 +5,18 @@ const priority = z.enum(["critical", "high", "medium", "low"]);
 const dataClassification = z.enum(["public", "internal", "confidential", "restricted"]);
 const contentDigest = z.string().regex(/^[a-f0-9]{64}$/i, "内容摘要必须是 SHA-256 十六进制值。");
 
+/**
+ * A4/P2：验收证据先做格式校验，再补附件上传（决策点 6）。
+ * 只接受 http(s) 链接或“类型:文档/记录引用”形如 document:xxx / minutes:… / artifact:uuid，
+ * 拒绝“已完成”这类无法核验的自由文本。格式由 schema 强制，HTTP 与 Agent 写通道共用。
+ */
+export const evidenceReference = z.string().trim().min(2).max(240).refine(
+  (value) => /^https?:\/\/\S+$/i.test(value) || /^[a-z][a-z0-9_-]*:[^\s]{1,219}$/i.test(value),
+  "验收证据必须是 http(s) 链接，或“类型:引用”形式的文档/记录 ID（如 document:acceptance-v1、minutes:weekly-ops:2026-W32、artifact:${uuid}），不接受无法核验的自由文本。",
+);
+
+export const evidenceRefs = z.array(evidenceReference).max(20).optional();
+
 export const publishMissionSchema = z.object({
   conversationId: z.uuid(),
   projectId: z.uuid().optional(),
@@ -73,7 +85,7 @@ export const claimPackageSchema = z.object({ expectedVersion: z.number().int().p
 export const transitionPackageSchema = z.object({
   expectedVersion: z.number().int().positive(),
   nextStatus: z.enum(["published", "assigned", "claimed", "in_progress", "blocked", "in_review", "completed", "cancelled"]),
-  evidenceRefs: z.array(z.string().trim().min(2).max(240)).max(20).optional(),
+  evidenceRefs,
   blockedReason: z.string().trim().min(4).max(500).optional(),
   /** P2: 验收退回（in_review → in_progress）时记录退回原因，进入事件链审计。 */
   reviewNote: z.string().trim().min(4).max(500).optional(),
