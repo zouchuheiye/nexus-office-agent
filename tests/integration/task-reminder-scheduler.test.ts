@@ -98,6 +98,45 @@ describe("Postgres 定时提醒调度", () => {
     expect(list.notifications[0].actorId).toBeUndefined();
   });
 
+  it("周期摘要以系统署名落库、面向整个租户并按周期幂等", async () => {
+    const publisher = createDevelopmentRequestContext("postgres-summary");
+    const conversation = (await service.workspace(publisher)).conversation;
+    await service.publishMission(publisher, {
+      conversationId: conversation.id,
+      title: "摘要验证",
+      objective: "验证常驻调度的租户级摘要。",
+      priority: "high",
+      dueAt: "2026-12-31T10:00:00.000Z",
+      packages: [{
+        title: "摘要包", description: "摘要用。", acceptanceCriteria: "摘要包含在办与风险。", requiredSkills: ["交付"],
+        assignmentMode: "direct", assigneeId: MEMBER_ID, priority: "high", dueAt: "2026-09-11T10:00:00.000Z",
+        startedAt: "2026-08-01T00:00:00.000Z", estimatedDays: 7, capacityPoints: 2,
+      }],
+    });
+    const now = new Date("2026-09-10T09:00:00.000Z");
+    const first = await service.generateScheduledSummary({ tenantId: DEMO_TENANT_ID, now });
+    expect(first).toMatchObject({ scope: "daily", periodKey: "2026-09-10", created: true, attribution: "system" });
+    expect(first.summary).toContain("在办任务");
+
+    const row = (await database.query<{ author_type: string; author_id: string | null; source: string; subject: string; content: string }>(
+      "SELECT author_type,author_id,source,subject,content FROM work_pool_messages WHERE tenant_id=$1 AND subject LIKE '工作进度摘要%'", [DEMO_TENANT_ID],
+    )).rows[0];
+    expect(row.author_type).toBe("system");
+    expect(row.author_id).toBeNull();
+    expect(row.source).toBe("system");
+    expect(row.content).toContain("风险：逾期");
+
+    const second = await service.generateScheduledSummary({ tenantId: DEMO_TENANT_ID, now });
+    expect(second.created).toBe(false);
+    expect(second.messageId).toBe(first.messageId);
+    expect((await database.query<{ count: string }>("SELECT count(*)::text AS count FROM work_pool_messages WHERE tenant_id=$1 AND subject LIKE '工作进度摘要%'", [DEMO_TENANT_ID])).rows[0].count).toBe("1");
+
+    // 下一个周期（次日）会再发一条
+    const nextDay = await service.generateScheduledSummary({ tenantId: DEMO_TENANT_ID, now: new Date("2026-09-11T09:00:00.000Z") });
+    expect(nextDay.created).toBe(true);
+    expect(nextDay.periodKey).toBe("2026-09-11");
+  });
+
   it("heartbeat 接受 task-reminder 角色，且系统署名的约束互斥生效", async () => {
     await database.query(
       "INSERT INTO worker_heartbeats(role,instance_id,release_version,capabilities,started_at,last_seen_at) VALUES('task-reminder','worker-1:task-reminder','test', '{}'::jsonb, now(), now())",

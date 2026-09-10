@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { RequestContext } from "@/src/platform/context/request-context";
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
-import type { AddPackageSubtaskInput, AppendPoolFeedbackInput, AppendTaskArtifactVersionInput, CreateTaskTemplateInput, DeletePackageSubtaskInput, ExportReportInput, GeneratePeriodicSummaryInput, InitiateTaskHandoffInput, ListPackageSubtasksInput, PublishMissionInput, PublishPoolMessageInput, RegisterTaskArtifactInput, RespondToTaskHandoffInput, RunReminderScanInput, TransitionPackageInput, UpdatePackageSubtaskInput, UpdateTaskTemplateInput } from "@/src/modules/task-command/application/schemas";
+import type { AddPackageSubtaskInput, AppendPoolFeedbackInput, AppendTaskArtifactVersionInput, CreateTaskTemplateInput, DeletePackageSubtaskInput, ExportReportInput, InitiateTaskHandoffInput, ListPackageSubtasksInput, PublishMissionInput, PublishPoolMessageInput, RegisterTaskArtifactInput, RespondToTaskHandoffInput, RunReminderScanInput, TransitionPackageInput, UpdatePackageSubtaskInput, UpdateTaskTemplateInput } from "@/src/modules/task-command/application/schemas";
 import { canMutatePackageSubtasks, claimWorkPackage, collectTaskReminderCandidates, completeWorkPackageSubtask, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, createWorkPackageSubtask, createWorkTaskNotification, deterministicUuid, dueStateOf, handoffWorkPackage, reopenWorkPackageSubtask, respondToTaskHandoff, revokeTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkPoolMessage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTaskNotification, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
 
 function hasPermission(context: RequestContext, permission: string): boolean {
@@ -33,6 +33,17 @@ type WorkPackageWithDue = WorkPackage & { dueState: "overdue" | "due_soon" | "no
 
 /** 通知文案不用术语：优先级与状态都用人话。 */
 const PRIORITY_LABELS: Record<WorkPackage["priority"], string> = { critical: "紧急", high: "高", medium: "中", low: "低" };
+
+/**
+ * 周期摘要的周期键（UTC）：日报用日期，周报用当周周一日期。
+ * 常驻调度器与脚本共用它，保证"同一周期只发一条"的口径一致。
+ */
+export function summaryPeriodKey(scope: "daily" | "weekly", now = new Date()): string {
+  if (scope === "daily") return now.toISOString().slice(0, 10);
+  const monday = new Date(now);
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  return monday.toISOString().slice(0, 10);
+}
 
 /**
  * P4 站内通知：由"某条刚写入的任务事件 + 一个收件人"生成一条通知。
@@ -1142,40 +1153,48 @@ export class TaskCommandService {
     };
   }
 
-  /** F-083: 周期进度摘要（日报/周报草稿），发布到公司消息池（按期间幂等）。 */
-  async generatePeriodicSummary(context: RequestContext, input: GeneratePeriodicSummaryInput) {
-    requirePermission(context, "work_task:read");
-    requirePermission(context, "message_pool:publish");
+  /**
+   * 周期进度摘要：由常驻调度器按周期（日报/周报）发布到公司消息池。
+   *
+   * 与个人视角的区别：这条摘要面向整个租户（在办/风险/本周期完成），并以 system 署名发布——
+   * 公司池是广播语义，把"某个人的个人视图"广播给全员既难读也容易误解。个人视角继续看
+   * 工作台「我的」与任务进度看板。
+   * 幂等：消息 ID 由「作用域 + 周期」确定（`task-summary:tenant:{scope}:{periodKey}`），
+   * 重复调度或两个实例同时运行都只会留下一条；同一周期的第二次调用返回 `created=false`。
+   */
+  async generateScheduledSummary(input: { tenantId: string; scope?: "daily" | "weekly"; now?: Date }) {
     const scope = input.scope ?? "daily";
-    const now = input.now ? new Date(input.now) : new Date();
-    const [workspace, packages] = await Promise.all([
-      this.workspace(context),
-      this.repository.listPackages(context.tenantId),
-    ]);
-    const dateKey = now.toISOString().slice(0, 10);
-    const weekKey = (() => { const d = new Date(now); const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); return d.toISOString().slice(0, 10); })();
-    const periodKey = scope === "weekly" ? weekKey : dateKey;
-    const done = packages.filter((item) => !item.isTemplate && ["completed", "cancelled"].includes(item.status) && (item.assigneeId === context.actorId || item.publishedBy === context.actorId));
-    const byStatus = (list: Array<WorkPackage & { dueState?: string }>) => ({
-      total: list.length,
-      overdue: list.filter((item) => item.dueState === "overdue").length,
-      dueSoon: list.filter((item) => item.dueState === "due_soon").length,
-      blocked: list.filter((item) => item.status === "blocked").length,
-    });
-    const mine = byStatus(workspace.myTasks);
-    const published = byStatus(workspace.publishedByMe);
-    const available = byStatus(workspace.availableTasks);
+    const now = input.now ?? new Date();
+    const periodKey = summaryPeriodKey(scope, now);
+    const periodStart = new Date(`${periodKey}T00:00:00.000Z`);
+    const packages = (await this.repository.listPackages(input.tenantId)).filter((item) => !item.isTemplate);
+    const withDue = packages.map((item) => ({ ...item, dueState: dueStateOf(item, now) }));
+    const active = withDue.filter((item) => !["completed", "cancelled"].includes(item.status));
+    const count = (predicate: (item: WorkPackageWithDue) => boolean) => withDue.filter(predicate).length;
+    const overdue = withDue.filter((item) => item.dueState === "overdue" && !["completed", "cancelled"].includes(item.status));
+    const completed = withDue.filter((item) => item.status === "completed" && item.completedAt && new Date(item.completedAt) >= periodStart);
+    const cancelled = withDue.filter((item) => item.status === "cancelled" && new Date(item.updatedAt) >= periodStart);
     const content = [
       `【工作进度摘要 · ${scope === "weekly" ? "周报" : "日报"} · ${periodKey}】`,
-      `- 我负责：${mine.total} 项（逾期 ${mine.overdue} / 临期 ${mine.dueSoon} / 阻塞 ${mine.blocked}）`,
-      `- 我发布：${published.total} 项（逾期 ${published.overdue} / 临期 ${published.dueSoon} / 阻塞 ${published.blocked}）`,
-      `- 待承接：${available.total} 项（逾期 ${available.overdue} / 临期 ${available.dueSoon}）`,
-      `- 已完成/已取消：${done.length} 项`,
-      `请确认后发出；如需详细任务列表可进入任务进度看板查看。`,
+      `- 在办任务：${active.length} 项（进行中 ${count((item) => item.status === "in_progress")} / 待验收 ${count((item) => item.status === "in_review")} / 阻塞 ${count((item) => item.status === "blocked")} / 待承接 ${count((item) => item.status === "published" && item.assignmentMode === "open_claim")}）`,
+      `- 风险：逾期 ${overdue.length} 项 · 临期（≤72 小时）${count((item) => item.dueState === "due_soon" && !["completed", "cancelled"].includes(item.status))} 项`,
+      `- 本周期完成：${completed.length} 项 · 取消：${cancelled.length} 项`,
+      ...(overdue.length ? [`- 逾期最长：${[...overdue].sort((left, right) => new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime()).slice(0, 3).map((item) => `${item.title}（截止 ${item.dueAt.slice(0, 10)}）`).join("；")}`] : []),
+      `逾期与阻塞任务已单独提醒到负责人；明细见任务进度看板。`,
     ].join("\n");
-    const message = { ...createPoolMessage({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", subject: `工作进度摘要（${scope === "weekly" ? "周报" : "日报"} · ${periodKey}）`, content, kind: "notice", authorType: "user", authorId: context.actorId, source: "agent" }), id: deterministicUuid(`task-summary:${scope}:${periodKey}`) };
-    const result = await this.repository.publishPoolMessage(message, messageEvent({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", messageId: message.id, eventType: "message_published", actorType: "user", actorId: context.actorId }));
-    return { scope, periodKey, summary: content, messageId: result.message.id, created: result.created, generatedAt: now.toISOString() };
+    const message = { ...createPoolMessage({
+      tenantId: input.tenantId, poolKey: "company", poolScope: "company",
+      subject: `工作进度摘要（${scope === "weekly" ? "周报" : "日报"} · ${periodKey}）`,
+      content, kind: "notice", authorType: "system", source: "system",
+    }), id: deterministicUuid(`task-summary:tenant:${scope}:${periodKey}`) };
+    const result = await this.repository.publishPoolMessage(message, messageEvent({
+      tenantId: input.tenantId, poolKey: "company", poolScope: "company",
+      messageId: message.id, eventType: "message_published", actorType: "system",
+    }));
+    return {
+      scope, periodKey, summary: content, messageId: result.message.id, created: result.created,
+      effective: active.length, generatedAt: now.toISOString(), attribution: "system" as const,
+    };
   }
   private async isTaskVisible(context: RequestContext, task: WorkPackage): Promise<boolean> {
     if (task.publishedBy === context.actorId || task.assigneeId === context.actorId) return true;

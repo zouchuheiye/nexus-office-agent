@@ -113,6 +113,10 @@ export function createDurableWorkerRuntime() {
       dueSoonHours: positiveInteger(process.env.TASK_REMINDER_DUE_SOON_HOURS, DEFAULT_TASK_REMINDER_OPTIONS.dueSoonHours),
       blockedEscalationHours: positiveInteger(process.env.TASK_REMINDER_BLOCKED_HOURS, DEFAULT_TASK_REMINDER_OPTIONS.blockedEscalationHours),
       timeoutMs: positiveInteger(process.env.TASK_REMINDER_TIMEOUT_MS, DEFAULT_TASK_REMINDER_OPTIONS.timeoutMs),
+      summary: {
+        enabled: process.env.TASK_SUMMARY_ENABLED !== "false",
+        scope: process.env.TASK_SUMMARY_SCOPE === "weekly" ? "weekly" : "daily",
+      },
     }));
   }
   const enabled = roles.map((role) => workers.get(role)!);

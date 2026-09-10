@@ -9,7 +9,7 @@ if (!process.env.DATABASE_URL && existsSync(".env.local")) {
 import { createPostgresDatabase } from "../src/platform/database/postgres";
 import { PostgresTaskCommandRepository } from "../src/modules/task-command/infrastructure/postgres-repository";
 import { TaskCommandService } from "../src/modules/task-command/application/service";
-import { createDevelopmentRequestContext } from "../src/platform/context/development-context";
+import { PostgresTenantDirectory } from "../src/platform/workers/postgres-work-repositories";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -17,36 +17,35 @@ if (!databaseUrl) {
   process.exitCode = 1;
 }
 
-async function runSummary() {
+/**
+ * 周期进度摘要的手工/一次性入口。常驻调度请用 `WORKER_ROLES=task-reminder npm run worker`
+ * （该角色按 `TASK_SUMMARY_SCOPE` 自动发日报/周报，并有心跳与优雅排空）。
+ *
+ * 摘要面向整个租户并以 system 署名发布到公司消息池；同一周期重复运行只会得到
+ * `created=false`（消息 ID 由「作用域 + 周期」确定）。个人视角请看工作台「我的」与任务进度看板。
+ */
+async function main() {
   const database = createPostgresDatabase(databaseUrl!);
   try {
     const service = new TaskCommandService(new PostgresTaskCommandRepository(database));
-    const context = createDevelopmentRequestContext("task-summary");
     const scopeIndex = process.argv.indexOf("--scope");
-    const scope = scopeIndex >= 0 ? process.argv[scopeIndex + 1] : "daily";
+    const scope = scopeIndex >= 0 ? process.argv[scopeIndex + 1] : (process.env.TASK_SUMMARY_SCOPE ?? "daily");
     if (scope !== "daily" && scope !== "weekly") throw new Error("SCOPE_INVALID");
-    const result = await service.generatePeriodicSummary(context, { scope });
-    console.info(JSON.stringify(result));
+    const tenantIndex = process.argv.indexOf("--tenant");
+    const explicitTenant = tenantIndex >= 0 ? process.argv[tenantIndex + 1] : undefined;
+    const tenants = explicitTenant ? [explicitTenant] : await new PostgresTenantDirectory(database).listActiveTenantIds();
+    const results = [];
+    for (const tenantId of tenants) {
+      const result = await service.generateScheduledSummary({ tenantId, scope });
+      results.push({ tenantId, periodKey: result.periodKey, messageId: result.messageId, created: result.created, effective: result.effective });
+    }
+    console.info(JSON.stringify({ tenants: tenants.length, results }));
   } finally {
     await database.close();
   }
-}
-
-async function main() {
-  const watch = process.argv.includes("--watch");
-  const intervalIndex = process.argv.indexOf("--interval");
-  const intervalMinutes = intervalIndex >= 0 ? Number(process.argv[intervalIndex + 1]) : 1440;
-  if (!Number.isFinite(intervalMinutes) || intervalMinutes <= 0) throw new Error("INTERVAL_INVALID");
-  await runSummary();
-  if (!watch) return;
-  console.info(`task-summary watch mode: next summary in ${intervalMinutes} minutes`);
-  const timer = setInterval(() => { void runSummary(); }, intervalMinutes * 60_000);
-  process.once("SIGTERM", () => { clearInterval(timer); process.exit(0); });
-  process.once("SIGINT", () => { clearInterval(timer); process.exit(0); });
 }
 
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
-

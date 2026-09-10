@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { TaskCommandService } from "@/src/modules/task-command/application/service";
 import { DEMO_DELIVERY_OWNER_ID, DEMO_PRODUCT_OWNER_ID, InMemoryTaskCommandRepository } from "@/src/modules/task-command/infrastructure/in-memory-repository";
-import { createDevelopmentRequestContext, DEMO_MANAGER_ID } from "@/src/platform/context/development-context";
+import { createDevelopmentRequestContext, DEMO_MANAGER_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
 import { collectTaskReminderCandidates, type WorkPackage } from "@/src/modules/task-command/domain/task-command";
 import { ToolRegistry } from "@/src/modules/agent/domain/tool";
 import { registerTaskCommandTools } from "@/src/modules/task-command/application/agent-tools";
@@ -190,7 +190,7 @@ describe("D-043: 后台到期提醒 / 负载 / 报表 / 周期摘要", () => {
     expect(company?.messages.some(({ subject }) => subject.includes("任务逾期提醒"))).toBe(true);
   });
 
-  it("F-083: generatePeriodicSummary 生成日报草稿并幂等发布", async () => {
+  it("F-083/E-151: 周期摘要面向整个租户、以系统署名发布并按周期幂等", async () => {
     const { service, publisher, conversation } = await fixture();
     await service.publishMission(publisher, {
       conversationId: conversation.id,
@@ -204,12 +204,21 @@ describe("D-043: 后台到期提醒 / 负载 / 报表 / 周期摘要", () => {
         dueAt: "2030-12-01T00:00:00.000Z", startedAt: "2030-11-01T00:00:00.000Z", estimatedDays: 5, capacityPoints: 2,
       }],
     });
-    const summary = await service.generatePeriodicSummary(publisher, { scope: "daily" });
+    const summary = await service.generateScheduledSummary({ tenantId: DEMO_TENANT_ID, scope: "daily" });
     expect(summary.created).toBe(true);
+    expect(summary.attribution).toBe("system");
     expect(summary.summary).toContain("工作进度摘要");
-    expect(summary.summary).toContain("我发布");
-    const again = await service.generatePeriodicSummary(publisher, { scope: "daily" });
+    expect(summary.summary).toContain("在办任务");
+    // 公司池里这条摘要是系统署名，不指向任何同事
+    const company = (await service.workspace(publisher)).messagePools.find(({ key }) => key === "company");
+    const posted = company?.messages.find(({ subject }) => subject.includes("工作进度摘要"));
+    expect(posted).toBeDefined();
+    expect(posted).toMatchObject({ authorType: "system", source: "system" });
+    expect(posted?.authorId).toBeUndefined();
+    // 同一周期重复发布只会得到一条
+    const again = await service.generateScheduledSummary({ tenantId: DEMO_TENANT_ID, scope: "daily" });
     expect(again.created).toBe(false);
+    expect(again.messageId).toBe(summary.messageId);
   });
 
   it("F-084: work.get_member_workload 工具已注册并可调用", async () => {

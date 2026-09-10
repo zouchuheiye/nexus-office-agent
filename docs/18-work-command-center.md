@@ -159,9 +159,11 @@ flowchart LR
 
 **提醒到人**：扫描在发公司池公告之外，还会给当事人写站内通知——临期/逾期给负责人，阻塞升级同时给负责人与发布人（无人承接的公开任务没有收件人，只留池消息）。通知类型为 `task_due_soon`/`task_overdue`/`task_blocked`。
 
-**幂等**：池消息沿用“日期 + 任务 + 类型”的确定性 ID；通知没有对应的任务事件行，因此用 `日期 + 任务 + 类型 + 收件人` 的确定性 `source_event_id` 落到 `(tenant_id, recipient_id, source_event_id)` 唯一索引上。重复扫描或两个实例同时运行都只会留下一条提醒，实测第二次扫描为 `created=0 / notificationsDeduplicated=2`。
+**周期进度摘要**：同一个 worker 角色还负责日报/周报（`TASK_SUMMARY_SCOPE=daily|weekly`，`TASK_SUMMARY_ENABLED=false` 可关闭）。摘要面向**整个租户**——在办任务按状态分布、逾期与临期计数、本周期完成/取消数、逾期最长的三条——以 system 署名发到公司消息池；个人视角继续看工作台「我的」与任务进度看板，不再把个人视图广播到公司池。周期键为 UTC 日期（日报）或当周周一（周报），消息 ID 由「作用域 + 周期」确定（`task-summary:tenant:{scope}:{periodKey}`），worker 另用内存标记避免每个轮询周期都查库；跨进程/重启的重复由确定性 ID 兜底。
 
-`scripts/task-reminder.ts` 保留为手工/一次性入口（`npm run task:reminder`，可带 `--tenant <uuid>`），走同一个系统扫描入口并按租户扫描，不再固定演示租户；`--watch` 已移除，常驻场景统一用 Worker 角色。
+**幂等**：池消息沿用“日期 + 任务 + 类型”的确定性 ID；通知没有对应的任务事件行，因此用 `日期 + 任务 + 类型 + 收件人` 的确定性 `source_event_id` 落到 `(tenant_id, recipient_id, source_event_id)` 唯一索引上。摘要用「作用域 + 周期」的确定性 ID。重复扫描或两个实例同时运行都只会留下一条提醒/一条摘要，实测第二次扫描为 `created=0 / notificationsDeduplicated=2`、摘要第二次为 `created=false`。
+
+`scripts/task-reminder.ts` 与 `scripts/task-summary.ts` 保留为手工/一次性入口（`npm run task:reminder` / `npm run task:summary`，均可带 `--tenant <uuid>`；摘要另可带 `--scope weekly`），走同一套系统入口并按租户扫描，不再固定演示租户；两者的 `--watch` 均已移除，常驻场景统一用 Worker 角色。
 
 ## 5. HTTP 契约
 

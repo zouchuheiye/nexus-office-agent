@@ -148,15 +148,46 @@ describe("P4 定时提醒常驻调度", () => {
     expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", new Date(now.getTime() + 2 * options.intervalMs))).toEqual({ role: "task-reminder", status: "idle" });
   });
 
+  it("周期摘要按周期键每个周期只发一条，跨周期后重新发布", async () => {
+    const { service, publisher, conversation } = await fixture();
+    await publishDueTask(service, publisher, conversation.id, "2026-09-11T10:00:00.000Z");
+    const worker = new TaskReminderWorker(service, { ...options, summary: { enabled: true, scope: "daily" } });
+
+    const day1 = new Date("2026-09-10T09:00:00.000Z");
+    expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", day1)).toEqual({ role: "task-reminder", status: "succeeded" });
+    const summaries = async () => (await service.workspace(publisher)).messagePools.flatMap((item) => item.messages).filter((item) => item.subject.includes("工作进度摘要"));
+    const first = await summaries();
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({ authorType: "system", source: "system" });
+    expect(first[0].content).toContain("在办任务");
+
+    // 同一周期（含超过提醒间隔后）不会重复发摘要
+    expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", new Date(day1.getTime() + options.intervalMs + 1))).toEqual({ role: "task-reminder", status: "succeeded" });
+    expect(await summaries()).toHaveLength(1);
+
+    // 进入下一个周期后重新发布一条
+    expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", new Date("2026-09-11T09:00:00.000Z"))).toEqual({ role: "task-reminder", status: "succeeded" });
+    expect(await summaries()).toHaveLength(2);
+  });
+
+  it("可以用 TASK_SUMMARY_ENABLED 关闭周期摘要（只跑提醒）", async () => {
+    const { service, publisher, conversation } = await fixture();
+    await publishDueTask(service, publisher, conversation.id, "2026-09-11T10:00:00.000Z");
+    const worker = new TaskReminderWorker(service, { ...options, summary: { enabled: false, scope: "daily" } });
+    expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", new Date("2026-09-10T09:00:00.000Z"))).toEqual({ role: "task-reminder", status: "succeeded" });
+    const messages = (await service.workspace(publisher)).messagePools.flatMap((item) => item.messages);
+    expect(messages.some((item) => item.subject.includes("工作进度摘要"))).toBe(false);
+    expect(messages.some((item) => item.subject.includes("任务临期提醒"))).toBe(true);
+  });
+
   it("扫描失败返回 failed 且不推进节流时间（下个周期可立即重试）", async () => {
-    const { service } = await fixture();
     const failing = {
       runScheduledReminderScan: async () => { throw new Error("REMINDER_SCAN_FAILED"); },
+      generateScheduledSummary: async () => { throw new Error("SUMMARY_FAILED"); },
     } as unknown as TaskCommandService;
     const worker = new TaskReminderWorker(failing, options);
     const now = new Date("2026-09-10T09:00:00.000Z");
     expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", now)).toEqual({ role: "task-reminder", status: "failed" });
     expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", new Date(now.getTime() + 1_000))).toEqual({ role: "task-reminder", status: "failed" });
-    void service;
   });
 });
