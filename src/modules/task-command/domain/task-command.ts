@@ -286,6 +286,27 @@ export type WorkMessagePool = {
   orgUnitId?: string;
 };
 
+/** P4 站内通知：收件人自己的任务动态（分派/承接/交接/验收），与消息池广播语义分开。 */
+export const WORK_NOTIFICATION_KINDS = ["task_assigned", "task_claimed", "handoff_requested", "handoff_responded", "review_requested", "review_decided"] as const;
+
+export type WorkNotificationKind = (typeof WORK_NOTIFICATION_KINDS)[number];
+
+export type WorkTaskNotification = {
+  id: string;
+  tenantId: string;
+  recipientId: string;
+  actorId: string;
+  kind: WorkNotificationKind;
+  title: string;
+  body: string;
+  refType: "work_package" | "work_handoff";
+  refId: string;
+  packageId: string;
+  sourceEventId: string;
+  createdAt: string;
+  readAt?: string;
+};
+
 export type WorkPoolMessage = {
   id: string;
   tenantId: string;
@@ -500,6 +521,14 @@ export function deterministicUuid(name: string): string {
 }
 export function createPoolMessage(input: Omit<WorkPoolMessage, "id" | "createdAt">, now = new Date()): WorkPoolMessage {
   return { ...input, id: randomUUID(), createdAt: now.toISOString() };
+}
+
+/**
+ * P4 站内通知：只按"某条事件通知某个人"生成，同一事件对同一收件人唯一。
+ * 调用方负责跳过"自己操作自己"的情况（收件人等于操作人时不生成）。
+ */
+export function createWorkTaskNotification(input: Omit<WorkTaskNotification, "id" | "createdAt" | "readAt">, now = new Date()): WorkTaskNotification {
+  return { ...input, title: input.title.trim(), body: input.body.trim(), id: randomUUID(), createdAt: now.toISOString() };
 }
 
 export function createPoolFeedback(input: Omit<WorkPoolFeedback, "id" | "createdAt">, now = new Date()): WorkPoolFeedback {

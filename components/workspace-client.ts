@@ -41,6 +41,20 @@ export type TimelineEvent = {
   occurredAt: string;
   payload: Record<string, unknown>;
 };
+/** P4 站内通知：只有收件人本人能看到（服务端按会话身份过滤）。 */
+export type WorkspaceNotification = {
+  id: string;
+  recipientId: string;
+  actorId: string;
+  kind: "task_assigned" | "task_claimed" | "handoff_requested" | "handoff_responded" | "review_requested" | "review_decided";
+  title: string;
+  body: string;
+  refType: "work_package" | "work_handoff";
+  refId: string;
+  packageId: string;
+  createdAt: string;
+  readAt?: string;
+};
 export type PersistedMessage = { id: string; role: "user" | "assistant" | "tool"; content: string; runId?: string; route: { skills: string[]; tools: string[] }; citations: Array<{ id: string; label: string; excerpt: string; objectType: string }>; createdAt: string };
 export type WorkspaceData = {
   conversation: { id: string; title: string };
@@ -54,6 +68,8 @@ export type WorkspaceData = {
   handoffs: TaskHandoff[];
   pendingHandoffs: TaskHandoffEntry[];
   messagePools: MessagePool[];
+  notifications: WorkspaceNotification[];
+  unreadNotificationCount: number;
   generatedAt: string;
 };
 
@@ -62,6 +78,36 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const payload = await response.json().catch(() => ({})) as { data?: T; error?: { message?: string } };
   if (!response.ok) throw new Error(payload.error?.message || "请求未完成");
   return payload.data as T;
+}
+
+/** P4：标记本人通知已读（服务端只接受收件人本人）。 */
+export async function markNotificationRead(id: string) {
+  return api<{ notification: WorkspaceNotification; unreadCount: number }>(`/api/v1/task-command/notifications/${id}/read`, { method: "POST" });
+}
+
+export async function markAllNotificationsRead() {
+  return api<{ updated: number; unreadCount: number }>("/api/v1/task-command/notifications/read-all", { method: "POST" });
+}
+
+/**
+ * P4：全局未读角标。只取一个计数，避免 office-shell 重复拉整份 workspace；
+ * 30 秒轮询兜底，并在本页动作后由 nexus:task-command-changed 立即刷新。
+ */
+export function useNotificationBadge(refreshMs = 30_000) {
+  const [unreadCount, setUnreadCount] = useState(0);
+  const load = useCallback(async () => {
+    try {
+      const data = await api<{ notifications: WorkspaceNotification[]; unreadCount: number }>("/api/v1/task-command/notifications?limit=1", { cache: "no-store" });
+      setUnreadCount(data.unreadCount);
+    } catch { /* 角标是尽力而为，不阻塞主界面 */ }
+  }, []);
+  useEffect(() => {
+    const first = window.setTimeout(() => void load(), 0);
+    const timer = window.setInterval(() => void load(), refreshMs);
+    window.addEventListener("nexus:task-command-changed", load);
+    return () => { window.clearTimeout(first); window.clearInterval(timer); window.removeEventListener("nexus:task-command-changed", load); };
+  }, [load, refreshMs]);
+  return { unreadCount, refresh: load };
 }
 
 export function useWorkspace(refreshMs = 30_000) {

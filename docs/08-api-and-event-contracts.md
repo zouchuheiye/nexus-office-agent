@@ -60,6 +60,7 @@ type RequestContext = {
 /task-command/packages/:id/claim /task-command/packages/:id/transition /task-command/packages/:id/handoffs
 /task-command/packages/:id/timeline /task-command/handoffs/:id/response
 /task-command/packages/:id/subtasks /task-command/packages/:id/subtasks/:subtaskId
+/task-command/notifications /task-command/notifications/:id/read /task-command/notifications/read-all
 /task-command/reports/export /task-command/events
 /organization/members /organization/members/:id /organization/members/:id/reactivate
 /auth/development-identities /auth/development-identities/switch
@@ -77,6 +78,8 @@ type RequestContext = {
 成员管理（员工目录）：`GET /organization/members` 返回在职成员目录（成员+部门+岗位+状态+邮箱）与可选部门/岗位（`orgUnits`/`positions`）以及当前主体是否可管理（`canManage`），读取需 `organization_member:read`；`?includeDeparted=true` 连已停用成员一起返回，但**该参数仅对 `organization_member:admin` 生效**——普通成员默认只见在职同事，显式索取离职名单返回 `403 ACCESS_DENIED`（不静默降级，便于发现越权）。`POST /organization/members` 新增成员（`displayName`、可选 `email/orgUnitId/positionId/isManager`）；`PATCH /organization/members/:id` 按 `expectedVersion` 编辑资料/任职；`DELETE /organization/members/:id?expectedVersion=` 软停用（不物理删，保留 users 行、历史任务与审计），并在同一事务内到期角色授权、撤销委托、客户端设备与外部身份；`POST /organization/members/:id/reactivate` 重新启用（`expectedVersion`，可选 `orgUnitId/positionId/isManager`，留空沿用停用前任职），只恢复在职与任职，不自动恢复停用时收回的角色授权/委托/设备/外部身份。写操作需 `organization_member:admin`（开发白名单仅管理员持有；正式环境由授权解析器预置）。邮箱同租户唯一（`MEMBER_EMAIL_TAKEN`）、岗位必须属于所选部门（`MEMBER_POSITION_ORG_MISMATCH`）、旧版本写入（`MEMBER_VERSION_CONFLICT`）、不能停用自己（`MEMBER_SELF_DEACTIVATE_DENIED`）、仍有进行中任务的成员不能停用（`MEMBER_HAS_ACTIVE_WORK`，需先完成或交接）、非停用成员不能重新启用（`MEMBER_NOT_DEPARTED`）、目标部门已归档不能恢复（`MEMBER_ORG_NOT_ACTIVE`）、非管理员查看离职名单（`POLICY_DENIED:organization_member:admin` → 403）。写入 users/memberships 由 0001 RLS 与 0009 原子审计触发器兜底，变更即时反映到任务工作区的人员/负载与授权解析。
 
 R3 提案（可编辑预览卡）：`GET /agent/proposals/:id` 返回本人可见的提案结构（含工具输入）；`POST /agent/proposals/:id/amend`（`proposalHash + input`）把人修正后的输入重新解析为一份新提案，并把原提案作废为 `revoked`——R3 提案本身不可篡改，只有新提案可被确认执行。无实际变更返回 `409 PROPOSAL_AMEND_NO_CHANGE`，非本人或非 pending 提案无法 amend，版本漂移在 amend 时同样拦截。
+
+站内通知（P4）：`GET /task-command/notifications?unreadOnly=&limit=` 返回当前主体自己的通知与未读数（`{notifications, unreadCount}`，收件人恒为会话身份，**不接受客户端指定他人**，`limit` 1–100 默认 30）；`POST /task-command/notifications/:id/read` 标记本人一条已读（幂等，不覆盖更早的 `read_at`）；`POST /task-command/notifications/read-all` 一键把本人未读清空。读取需 `work_task:read`。六类通知来自任务链路的真实事件——`task_assigned`（定向分派给某人）、`task_claimed`（公开承接被他人领取，通知发布人）、`handoff_requested`（待对方签收）、`handoff_responded`（签收/退回/撤回结果）、`review_requested`（待发布人验收）、`review_decided`（验收通过或被退回，退回原因进正文）；操作人等于收件人时不产生通知，`open_claim` 只挂部门池没有收件人时也不产生通知，子任务勾选不通知（避免噪声）。通知行与业务变更、`work_task_events` 审计事件在**同一租户事务**内写入：版本 CAS 冲突或校验失败时既不写事件也不写通知。越权（他人通知 ID）与不存在统一返回 `404 WORK_NOTIFICATION_NOT_FOUND`，不泄露存在性。`GET /task-command/workspace` 的载荷同时携带 `notifications`（本人最近 30 条）与 `unreadNotificationCount`，客户端据此渲染未读角标，不需要额外轮询接口。Agent 侧只提供只读工具 `work.list_my_notifications`（R0，无确认），不提供任何通知写工具。
 
 会议确认转化的决定保存 `sourceMeetingId`，服务端校验来源会议和决定属于同一租户、同一项目；行动项通过 `decisionId` 关联该决定。知识搜索只返回当前已生效且未过期版本，并在引用中返回原始 `sourceRef`、版本定位、有效时间和不泄露 ACL 明细的 `accessBasis`。
 

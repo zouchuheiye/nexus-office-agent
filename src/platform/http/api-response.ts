@@ -51,6 +51,7 @@ const errorRules: ErrorRule[] = [
   { match: codes(["WORK_PACKAGE_VERSION_CONFLICT", "WORK_PACKAGE_NOT_CLAIMABLE", "WORK_MISSION_CONFLICT"]), status: 409, message: "任务已被他人承接、版本已变化或当前状态不允许该操作。" },
   { match: codes(["WORK_TEMPLATE_ONLY"]), status: 422, message: "只有任务模板可以在模板入口直接修改；正式任务请走正式状态变更流程。" },
   { match: codes(["MEMBER_NOT_FOUND"]), status: 404, message: "成员不存在或已不在当前组织。" },
+  { match: codes(["WORK_NOTIFICATION_NOT_FOUND"]), status: 404, message: "通知不存在，或者不属于当前用户（通知只能由收件人自己读取）。" },
   { match: (code) => code.startsWith("MEMBER_"), status: 409, message: "成员资料存在冲突，请刷新后重试。" },
   { match: codes(["INTEGRATION_CONNECTION_NOT_ACTIVE", "TEST_NOTIFICATION_PROPOSAL_STATE_CONFLICT", "TEST_NOTIFICATION_PROPOSAL_CONFLICT"]), status: 409, message: "连接或确认对象的当前状态不允许该操作。" },
   { match: codes(["MANAGEMENT_CHANNEL_RECIPIENT_MISMATCH"]), status: 403, message: "企业微信动作接收人与当前身份不匹配。" },

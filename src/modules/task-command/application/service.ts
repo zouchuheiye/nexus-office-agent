@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { RequestContext } from "@/src/platform/context/request-context";
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
 import type { AddPackageSubtaskInput, AppendPoolFeedbackInput, AppendTaskArtifactVersionInput, CreateTaskTemplateInput, DeletePackageSubtaskInput, ExportReportInput, GeneratePeriodicSummaryInput, InitiateTaskHandoffInput, ListPackageSubtasksInput, PublishMissionInput, PublishPoolMessageInput, RegisterTaskArtifactInput, RespondToTaskHandoffInput, RunReminderScanInput, TransitionPackageInput, UpdatePackageSubtaskInput, UpdateTaskTemplateInput } from "@/src/modules/task-command/application/schemas";
-import { canMutatePackageSubtasks, claimWorkPackage, collectTaskReminderCandidates, completeWorkPackageSubtask, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, createWorkPackageSubtask, deterministicUuid, dueStateOf, handoffWorkPackage, reopenWorkPackageSubtask, respondToTaskHandoff, revokeTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
+import { canMutatePackageSubtasks, claimWorkPackage, collectTaskReminderCandidates, completeWorkPackageSubtask, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, createWorkPackageSubtask, createWorkTaskNotification, deterministicUuid, dueStateOf, handoffWorkPackage, reopenWorkPackageSubtask, respondToTaskHandoff, revokeTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTaskNotification, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
 
 function hasPermission(context: RequestContext, permission: string): boolean {
   const [resource, action] = permission.split(":");
@@ -30,6 +30,39 @@ function canAccessOrgScope(context: RequestContext, orgUnitId: string): boolean 
 }
 
 type WorkPackageWithDue = WorkPackage & { dueState: "overdue" | "due_soon" | "normal" | "done" };
+
+/** 通知文案不用术语：优先级与状态都用人话。 */
+const PRIORITY_LABELS: Record<WorkPackage["priority"], string> = { critical: "紧急", high: "高", medium: "中", low: "低" };
+
+/**
+ * P4 站内通知：由"某条刚写入的任务事件 + 一个收件人"生成一条通知。
+ * 收件人等于操作人、或没有收件人时返回空数组（自己操作自己不需要提醒）。
+ */
+function taskNotification(input: {
+  event: Omit<WorkTaskEvent, "sequence">;
+  recipientId?: string;
+  actorId: string;
+  kind: WorkTaskNotification["kind"];
+  title: string;
+  body: string;
+  refType: WorkTaskNotification["refType"];
+  refId: string;
+  packageId: string;
+}): WorkTaskNotification[] {
+  if (!input.recipientId || input.recipientId === input.actorId) return [];
+  return [createWorkTaskNotification({
+    tenantId: input.event.tenantId,
+    recipientId: input.recipientId,
+    actorId: input.actorId,
+    kind: input.kind,
+    title: input.title,
+    body: input.body,
+    refType: input.refType,
+    refId: input.refId,
+    packageId: input.packageId,
+    sourceEventId: input.event.id,
+  })];
+}
 
 function withDueState(item: WorkPackage): WorkPackageWithDue {
   return { ...item, dueState: dueStateOf(item) };
@@ -102,11 +135,18 @@ export class TaskCommandService {
     const messagePools = hasPermission(context, "message_pool:read")
       ? await this.messagePools(context, people, orgUnits)
       : [];
+    // P4：站内通知随工作区一起返回，收件人恒为当前主体（另见 notifications()）。
+    const [notifications, unreadNotificationCount] = await Promise.all([
+      this.repository.listNotifications(context.tenantId, context.actorId, { limit: 30 }),
+      this.repository.countUnreadNotifications(context.tenantId, context.actorId),
+    ]);
     return {
       conversation,
       messages,
       people,
       orgUnits,
+      notifications,
+      unreadNotificationCount,
       missions: missions.filter((mission) => visible.some((item) => item.missionId === mission.id)),
       myTasks: visible.filter((item) => item.assigneeId === context.actorId && !item.isTemplate && !["completed", "cancelled"].includes(item.status)).map(withDueAndProgress),
       availableTasks: visible.filter((item) => !item.isTemplate && item.assignmentMode === "open_claim" && item.status === "published" && !item.assigneeId).map(withDueAndProgress),
@@ -267,10 +307,16 @@ export class TaskCommandService {
       missingFields,
       packages: normalizedPackages,
     });
-    const events: Omit<WorkTaskEvent, "sequence">[] = [
-      event({ tenantId: context.tenantId, missionId: bundle.mission.id, eventType: "mission_published", actorId: context.actorId, audience: "tenant", payload: { title: bundle.mission.title, packageCount: bundle.packages.length } }),
-      ...bundle.packages.map((item) => event({ tenantId: context.tenantId, missionId: item.missionId, packageId: item.id, eventType: "package_published", actorId: context.actorId, audience: item.assignmentMode === "open_claim" ? "tenant" : "participants", payload: { title: item.title, assigneeId: item.assigneeId, assignmentMode: item.assignmentMode, version: item.version } })),
-    ];
+    const missionEvent = event({ tenantId: context.tenantId, missionId: bundle.mission.id, eventType: "mission_published", actorId: context.actorId, audience: "tenant", payload: { title: bundle.mission.title, packageCount: bundle.packages.length } });
+    const packageEvents = bundle.packages.map((item) => event({ tenantId: context.tenantId, missionId: item.missionId, packageId: item.id, eventType: "package_published", actorId: context.actorId, audience: item.assignmentMode === "open_claim" ? "tenant" : "participants", payload: { title: item.title, assigneeId: item.assigneeId, assignmentMode: item.assignmentMode, version: item.version } }));
+    const events: Omit<WorkTaskEvent, "sequence">[] = [missionEvent, ...packageEvents];
+    // P4：定向分派时通知被分派人（公开承接没有收件人，不产生通知）。
+    const notifications = bundle.packages.flatMap((item, index) => item.assignmentMode === "direct" ? taskNotification({
+      event: packageEvents[index], recipientId: item.assigneeId, actorId: context.actorId,
+      kind: "task_assigned", title: `新任务：${item.title}`,
+      body: `你被指定为负责人，截止 ${item.dueAt.slice(0, 10)}（优先级 ${PRIORITY_LABELS[item.priority]}）。`,
+      refType: "work_package", refId: item.id, packageId: item.id,
+    }) : []);
     const warnings: string[] = [];
     for (const item of normalizedPackages) {
       if (item.assignmentMode === "direct" && item.assigneeId) {
@@ -281,7 +327,7 @@ export class TaskCommandService {
       }
     }
     if (missingFields.length) warnings.push(`任务已按当前信息发布，待补充：${missingFields.join("、")}。`);
-    const result = await this.repository.publishMission(bundle.mission, bundle.packages, events);
+    const result = await this.repository.publishMission(bundle.mission, bundle.packages, events, notifications);
     return { ...result, warnings };
   }
 
@@ -351,7 +397,17 @@ export class TaskCommandService {
     }
     if (current.version !== expectedVersion) throw new Error("WORK_PACKAGE_VERSION_CONFLICT");
     const next = claimWorkPackage(current, context.actorId);
-    const changed = await this.repository.claimPackage({ current, next, expectedVersion, event: event({ tenantId: context.tenantId, missionId: current.missionId, packageId: current.id, eventType: "package_claimed", actorId: context.actorId, audience: "participants", payload: { assigneeId: context.actorId, version: next.version } }) });
+    const claimEvent = event({ tenantId: context.tenantId, missionId: current.missionId, packageId: current.id, eventType: "package_claimed", actorId: context.actorId, audience: "participants", payload: { assigneeId: context.actorId, version: next.version } });
+    const changed = await this.repository.claimPackage({
+      current, next, expectedVersion,
+      event: claimEvent,
+      notifications: taskNotification({
+        event: claimEvent, recipientId: current.publishedBy, actorId: context.actorId,
+        kind: "task_claimed", title: `任务已被承接：${current.title}`,
+        body: `有人承接了你发布的任务，责任已转到承接人（截止 ${current.dueAt.slice(0, 10)}）。`,
+        refType: "work_package", refId: current.id, packageId: current.id,
+      }),
+    });
     if (!changed) throw new Error("WORK_PACKAGE_VERSION_CONFLICT");
     return next;
   }
@@ -385,7 +441,28 @@ export class TaskCommandService {
     } else if (current.status === "in_review" && input.nextStatus === "completed") {
       eventPayload.decision = "accept";
     }
-    const changed = await this.repository.transitionPackage({ current, next, expectedVersion: input.expectedVersion, event: event({ tenantId: context.tenantId, missionId: current.missionId, packageId: current.id, eventType: "package_status_changed", actorId: context.actorId, audience: "participants", payload: eventPayload }) });
+    const statusEvent = event({ tenantId: context.tenantId, missionId: current.missionId, packageId: current.id, eventType: "package_status_changed", actorId: context.actorId, audience: "participants", payload: eventPayload });
+    // P4：提交验收通知发布人，验收结论通知承接人（退回时把原因带进通知正文）。
+    const statusNotifications = next.status === "in_review"
+      ? taskNotification({
+        event: statusEvent, recipientId: current.publishedBy, actorId: context.actorId,
+        kind: "review_requested", title: `待你验收：${current.title}`,
+        body: "执行人已提交验收并附证据，请核验后决定通过或退回。",
+        refType: "work_package", refId: current.id, packageId: current.id,
+      })
+      : current.status === "in_review" && ["completed", "in_progress"].includes(next.status)
+        ? taskNotification({
+          event: statusEvent, recipientId: current.assigneeId, actorId: context.actorId,
+          kind: "review_decided", title: next.status === "completed" ? `验收通过：${current.title}` : `验收被退回：${current.title}`,
+          body: next.status === "completed" ? "发布人已验收通过，任务完成。" : `发布人退回了验收，原因：${input.reviewNote?.trim() ?? "未填写"}`,
+          refType: "work_package", refId: current.id, packageId: current.id,
+        })
+        : [];
+    const changed = await this.repository.transitionPackage({
+      current, next, expectedVersion: input.expectedVersion,
+      event: statusEvent,
+      notifications: statusNotifications,
+    });
     if (!changed) throw new Error("WORK_PACKAGE_VERSION_CONFLICT");
     return next;
   }
@@ -516,7 +593,7 @@ export class TaskCommandService {
       source: execution?.source ?? "human",
       sourceRunId: execution?.sourceRunId,
     });
-    return this.repository.initiateHandoff(handoff, event({
+    const handoffEvent = event({
       tenantId: context.tenantId,
       missionId: current.missionId,
       packageId: current.id,
@@ -524,6 +601,12 @@ export class TaskCommandService {
       actorId: context.actorId,
       audience: "participants",
       payload: { handoffId: handoff.id, fromAssigneeId: handoff.fromAssigneeId, toAssigneeId: handoff.toAssigneeId, packageVersion: handoff.snapshot.packageVersion, artifactSnapshotCount: handoff.artifactSnapshots.length, legacyArtifactRefCount: handoff.artifactRefs.length },
+    });
+    return this.repository.initiateHandoff(handoff, handoffEvent, taskNotification({
+      event: handoffEvent, recipientId: handoff.toAssigneeId, actorId: context.actorId,
+      kind: "handoff_requested", title: `待你签收交接：${current.title}`,
+      body: `有人把任务交接给你：${handoff.note}（签收后责任才转到你）。`,
+      refType: "work_handoff", refId: handoff.id, packageId: current.id,
     }));
   }
 
@@ -541,20 +624,27 @@ export class TaskCommandService {
     const status = input.decision === "accept" ? "accepted" : "rejected" as const;
     const next = respondToTaskHandoff(current, { status, responseNote: input.responseNote, respondedBy: context.actorId, responseRunId: execution?.sourceRunId });
     const nextPackage = status === "accepted" ? handoffWorkPackage(task, current.toAssigneeId) : undefined;
+    const handoffResponseEvent = event({
+      tenantId: context.tenantId,
+      missionId: task.missionId,
+      packageId: task.id,
+      eventType: status === "accepted" ? "package_handoff_accepted" : "package_handoff_rejected",
+      actorId: context.actorId,
+      audience: "participants",
+      payload: { handoffId: current.id, fromAssigneeId: current.fromAssigneeId, toAssigneeId: current.toAssigneeId, decision: input.decision, packageVersion: nextPackage?.version ?? task.version, artifactSnapshotCount: current.artifactSnapshots.length, legacyArtifactRefCount: current.artifactRefs.length },
+    });
     const changed = await this.repository.respondToHandoff({
       current,
       next,
       currentPackage: task,
       nextPackage,
       expectedVersion: input.expectedVersion,
-      event: event({
-        tenantId: context.tenantId,
-        missionId: task.missionId,
-        packageId: task.id,
-        eventType: status === "accepted" ? "package_handoff_accepted" : "package_handoff_rejected",
-        actorId: context.actorId,
-        audience: "participants",
-        payload: { handoffId: current.id, fromAssigneeId: current.fromAssigneeId, toAssigneeId: current.toAssigneeId, decision: input.decision, packageVersion: nextPackage?.version ?? task.version, artifactSnapshotCount: current.artifactSnapshots.length, legacyArtifactRefCount: current.artifactRefs.length },
+      event: handoffResponseEvent,
+      notifications: taskNotification({
+        event: handoffResponseEvent, recipientId: current.fromAssigneeId, actorId: context.actorId,
+        kind: "handoff_responded", title: status === "accepted" ? `交接已签收：${task.title}` : `交接被退回：${task.title}`,
+        body: status === "accepted" ? "接收人已签收，责任已转到对方。" : `接收人退回了交接，原因：${input.responseNote?.trim() || "未填写"}。`,
+        refType: "work_handoff", refId: current.id, packageId: task.id,
       }),
     });
     if (!changed) throw new Error("WORK_HANDOFF_CHAIN_CHANGED");
@@ -574,20 +664,27 @@ export class TaskCommandService {
     }
     if (task.version !== expectedVersion || task.version !== current.snapshot.packageVersion || task.assigneeId !== current.fromAssigneeId) throw new Error("WORK_HANDOFF_CHAIN_CHANGED");
     const next = revokeTaskHandoff(current, { respondedBy: context.actorId, responseRunId: execution?.sourceRunId });
+    const revokeEvent = event({
+      tenantId: context.tenantId,
+      missionId: task.missionId,
+      packageId: task.id,
+      eventType: "package_handoff_rejected",
+      actorId: context.actorId,
+      audience: "participants",
+      payload: { handoffId: current.id, fromAssigneeId: current.fromAssigneeId, toAssigneeId: current.toAssigneeId, decision: "revoke", packageVersion: task.version, artifactSnapshotCount: current.artifactSnapshots.length, legacyArtifactRefCount: current.artifactRefs.length },
+    });
     const changed = await this.repository.respondToHandoff({
       current,
       next,
       currentPackage: task,
       nextPackage: undefined,
       expectedVersion,
-      event: event({
-        tenantId: context.tenantId,
-        missionId: task.missionId,
-        packageId: task.id,
-        eventType: "package_handoff_rejected",
-        actorId: context.actorId,
-        audience: "participants",
-        payload: { handoffId: current.id, fromAssigneeId: current.fromAssigneeId, toAssigneeId: current.toAssigneeId, decision: "revoke", packageVersion: task.version, artifactSnapshotCount: current.artifactSnapshots.length, legacyArtifactRefCount: current.artifactRefs.length },
+      event: revokeEvent,
+      notifications: taskNotification({
+        event: revokeEvent, recipientId: current.toAssigneeId, actorId: context.actorId,
+        kind: "handoff_responded", title: `交接已撤回：${task.title}`,
+        body: "发起人撤回了这条待签收交接，任务继续由原负责人负责，你无需再处理。",
+        refType: "work_handoff", refId: current.id, packageId: task.id,
       }),
     });
     if (!changed) throw new Error("WORK_HANDOFF_CHAIN_CHANGED");
@@ -690,6 +787,34 @@ export class TaskCommandService {
     ]);
     const visibleKeys = new Set((await this.messagePoolCatalog(context, people, orgUnits)).map(({ key }) => key));
     return events.filter(({ poolKey }) => visibleKeys.has(poolKey));
+  }
+
+  /** P4：只读本人通知（收件人恒为当前主体，不接受他人 ID）。 */
+  async notifications(context: RequestContext, input: { unreadOnly?: boolean; limit?: number }) {
+    requirePermission(context, "work_task:read");
+    const limit = Math.min(Math.max(input.limit ?? 30, 1), 100);
+    const [notifications, unreadCount] = await Promise.all([
+      this.repository.listNotifications(context.tenantId, context.actorId, { unreadOnly: input.unreadOnly === true, limit }),
+      this.repository.countUnreadNotifications(context.tenantId, context.actorId),
+    ]);
+    return { notifications, unreadCount };
+  }
+
+  /** P4：标记本人某条通知已读；越权或不存在都返回同一错误码，不泄露存在性。 */
+  async markNotificationRead(context: RequestContext, id: string) {
+    requirePermission(context, "work_task:read");
+    const current = await this.repository.getNotification(context.tenantId, id);
+    if (!current || current.recipientId !== context.actorId) throw new Error("WORK_NOTIFICATION_NOT_FOUND");
+    const readAt = current.readAt ?? new Date().toISOString();
+    await this.repository.markNotificationRead(context.tenantId, id, context.actorId, readAt);
+    return { notification: { ...current, readAt }, unreadCount: await this.repository.countUnreadNotifications(context.tenantId, context.actorId) };
+  }
+
+  /** P4：一键全部已读（只影响本人未读）。 */
+  async markAllNotificationsRead(context: RequestContext) {
+    requirePermission(context, "work_task:read");
+    const updated = await this.repository.markAllNotificationsRead(context.tenantId, context.actorId, new Date().toISOString());
+    return { updated, unreadCount: await this.repository.countUnreadNotifications(context.tenantId, context.actorId) };
   }
 
   async publishPoolMessage(context: RequestContext, input: PublishPoolMessageInput, execution?: { sourceRunId?: string; source?: "human" | "agent" }) {

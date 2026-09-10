@@ -148,6 +148,16 @@ export function registerTaskCommandTools(registry: ToolRegistry, service: TaskCo
     execute(context, input) { return service.taskHandoffTrail(context, taskHandoffTrailSchema.parse(input).taskId); },
   });
   registry.register({
+    id: "work.list_my_notifications", skillId: "work-orchestration", version: 1,
+    description: "只读列出当前用户自己的站内通知（别人给的任务分派、承接了你发布的任务、待你签收的交接、交接结果、待你验收、验收通过或被退回）。收件人固定为当前用户，不能查询他人通知；用户问“我有什么通知/谁给我派了任务/有什么待我处理”时先用本工具核验，不要猜测。",
+    requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: { unreadOnly: { type: "boolean", description: "true 时只看未读" }, limit: { type: "integer", minimum: 1, maximum: 100 } }, required: [] },
+    inputSchema: z.object({ unreadOnly: z.boolean().optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
+    preview(input) { const value = z.object({ unreadOnly: z.boolean().optional() }).parse(input); return value.unreadOnly ? "读取当前用户自己的未读通知。" : "读取当前用户自己的站内通知。"; },
+    execute(context, input) { const value = z.object({ unreadOnly: z.boolean().optional(), limit: z.number().int().min(1).max(100).optional() }).strict().parse(input); return service.notifications(context, { unreadOnly: value.unreadOnly, limit: value.limit }); },
+  });
+  registry.register({
     id: "work.get_task_progress", skillId: "work-orchestration", version: 1,
     description: "只读查询当前用户有权读取的任务进度事实卡：负责人、开始/截止时间、工期、状态、临期/逾期标记、全生命周期事件时间线和交接链。回答任务进度、剩余工期或卡在哪个环节前应优先使用本工具核验，不得猜测。",
     requiredPermissions: ["work_task:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,

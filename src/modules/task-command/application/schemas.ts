@@ -212,3 +212,11 @@ export const generatePeriodicSummarySchema = z.object({
 export type ExportReportInput = z.infer<typeof exportReportSchema>;
 export type RunReminderScanInput = z.infer<typeof runReminderScanSchema>;
 export type GeneratePeriodicSummaryInput = z.infer<typeof generatePeriodicSummarySchema>;
+
+/** P4 站内通知：只读本人列表（收件人由会话身份决定，不接受客户端指定）。 */
+export const listNotificationsSchema = z.object({
+  unreadOnly: z.enum(["true", "false"]).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+}).strict();
+
+export type ListNotificationsInput = z.infer<typeof listNotificationsSchema>;

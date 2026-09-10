@@ -1,5 +1,5 @@
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
-import type { WorkArtifact, WorkArtifactVersion, WorkConversation, WorkConversationMessage, WorkMessageEvent, WorkMission, WorkOrgUnit, WorkPackage, WorkPackageSubtask, WorkPerson, WorkPoolFeedback, WorkPoolMessage, WorkTaskEvent, WorkTaskHandoff } from "@/src/modules/task-command/domain/task-command";
+import type { WorkArtifact, WorkArtifactVersion, WorkConversation, WorkConversationMessage, WorkMessageEvent, WorkMission, WorkOrgUnit, WorkPackage, WorkPackageSubtask, WorkPerson, WorkPoolFeedback, WorkPoolMessage, WorkTaskEvent, WorkTaskHandoff, WorkTaskNotification } from "@/src/modules/task-command/domain/task-command";
 import type { DatabaseExecutor, TransactionalDatabase } from "@/src/platform/database/executor";
 
 type Row = Record<string, unknown>;
@@ -64,6 +64,12 @@ const mapPoolFeedback = (row: Row): WorkPoolFeedback => ({
 const mapMessageEvent = (row: Row): WorkMessageEvent => ({
   sequence: Number(row.sequence), id: text(row.id), tenantId: text(row.tenant_id), poolKey: poolKey(text(row.pool_scope), row.org_unit_id), poolScope: row.pool_scope as WorkMessageEvent["poolScope"], orgUnitId: optionalText(row.org_unit_id),
   messageId: text(row.message_id), eventType: row.event_type as WorkMessageEvent["eventType"], actorId: text(row.actor_id), occurredAt: text(row.occurred_at),
+});
+const mapNotification = (row: Row): WorkTaskNotification => ({
+  id: text(row.id), tenantId: text(row.tenant_id), recipientId: text(row.recipient_id), actorId: text(row.actor_id),
+  kind: row.kind as WorkTaskNotification["kind"], title: text(row.title), body: text(row.body),
+  refType: row.ref_type as WorkTaskNotification["refType"], refId: text(row.ref_id), packageId: text(row.package_id),
+  sourceEventId: text(row.source_event_id), createdAt: text(row.created_at), readAt: optionalText(row.read_at),
 });
 
 export class PostgresTaskCommandRepository implements TaskCommandRepository {
@@ -167,7 +173,7 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
     });
   }
 
-  async publishMission(mission: WorkMission, packages: WorkPackage[], events: Omit<WorkTaskEvent, "sequence">[]) {
+  async publishMission(mission: WorkMission, packages: WorkPackage[], events: Omit<WorkTaskEvent, "sequence">[], notifications: WorkTaskNotification[] = []) {
     return this.database.withTenant(mission.tenantId, async (db) => {
       const inserted = await db.query(`INSERT INTO work_missions(id,tenant_id,conversation_id,project_id,title,objective,priority,due_at,status,published_by,source,source_run_id,is_template,missing_fields,version,created_at,updated_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT DO NOTHING RETURNING id`,
@@ -183,6 +189,7 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
       if (!inserted.length) throw new Error("WORK_MISSION_CONFLICT");
       for (const item of packages) await this.insertPackage(db, item);
       for (const item of events) await this.insertEvent(db, item);
+      for (const item of notifications) await this.insertNotification(db, item);
       return { mission, packages, created: true };
     });
   }
@@ -202,12 +209,12 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
     });
   }
 
-  async claimPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number }) {
-    return this.updatePackage(input.current.tenantId, input.next, input.expectedVersion, input.event, "assignment_mode='open_claim' AND status='published' AND assignee_id IS NULL");
+  async claimPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number; notifications?: WorkTaskNotification[] }) {
+    return this.updatePackage(input.current.tenantId, input.next, input.expectedVersion, input.event, "assignment_mode='open_claim' AND status='published' AND assignee_id IS NULL", input.notifications);
   }
 
-  async transitionPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number }) {
-    return this.updatePackage(input.current.tenantId, input.next, input.expectedVersion, input.event, "true");
+  async transitionPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number; notifications?: WorkTaskNotification[] }) {
+    return this.updatePackage(input.current.tenantId, input.next, input.expectedVersion, input.event, "true", input.notifications);
   }
 
   async listEvents(tenantId: string, actorId: string, after: number, limit: number) {
@@ -271,7 +278,7 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
     });
   }
 
-  async initiateHandoff(handoff: WorkTaskHandoff, event: Omit<WorkTaskEvent, "sequence">) {
+  async initiateHandoff(handoff: WorkTaskHandoff, event: Omit<WorkTaskEvent, "sequence">, notifications: WorkTaskNotification[] = []) {
     return this.database.withTenant(handoff.tenantId, async (db) => {
       const inserted = await db.query(`INSERT INTO work_task_handoffs(id,tenant_id,package_id,mission_id,from_assignee_id,to_assignee_id,initiated_by,note,current_progress,completed_work,pending_work,attention_points,artifact_refs,artifact_snapshots,package_snapshot,source,source_run_id,status,created_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT DO NOTHING RETURNING id`,
@@ -282,11 +289,12 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
       }
       if (!inserted.length) throw new Error("WORK_HANDOFF_CONFLICT");
       await this.insertEvent(db, event);
+      for (const item of notifications) await this.insertNotification(db, item);
       return { handoff, created: true };
     });
   }
 
-  async respondToHandoff(input: { current: WorkTaskHandoff; next: WorkTaskHandoff; currentPackage: WorkPackage; nextPackage?: WorkPackage; expectedVersion: number; event: Omit<WorkTaskEvent, "sequence"> }) {
+  async respondToHandoff(input: { current: WorkTaskHandoff; next: WorkTaskHandoff; currentPackage: WorkPackage; nextPackage?: WorkPackage; expectedVersion: number; event: Omit<WorkTaskEvent, "sequence">; notifications?: WorkTaskNotification[] }) {
     return this.database.withTenant(input.current.tenantId, async (db) => {
       const handoffRows = await db.query(`UPDATE work_task_handoffs SET status=$3,response_note=$4,responded_by=$5,response_run_id=$6,responded_at=$7
         WHERE tenant_id=$1 AND id=$2 AND status='pending' RETURNING id`,
@@ -308,7 +316,55 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
         if (!packageRows.length) throw new Error("WORK_HANDOFF_CHAIN_CHANGED");
       }
       await this.insertEvent(db, input.event);
+      for (const item of input.notifications ?? []) await this.insertNotification(db, item);
       return true;
+    });
+  }
+
+  async listNotifications(tenantId: string, recipientId: string, options: { unreadOnly?: boolean; limit: number }) {
+    const limit = Math.min(Math.max(options.limit, 1), 100);
+    return this.database.withTenant(tenantId, async (db) => (await db.query(
+      `SELECT * FROM work_task_notifications
+       WHERE tenant_id=$1 AND recipient_id=$2 AND ($3::boolean = false OR read_at IS NULL)
+       ORDER BY created_at DESC, id DESC LIMIT $4`,
+      [tenantId, recipientId, options.unreadOnly === true, limit],
+    )).map(mapNotification));
+  }
+
+  async countUnreadNotifications(tenantId: string, recipientId: string) {
+    return this.database.withTenant(tenantId, async (db) => {
+      const rows = await db.query("SELECT count(*)::int AS count FROM work_task_notifications WHERE tenant_id=$1 AND recipient_id=$2 AND read_at IS NULL", [tenantId, recipientId]);
+      return Number(rows[0]?.count ?? 0);
+    });
+  }
+
+  async getNotification(tenantId: string, id: string) {
+    return this.database.withTenant(tenantId, async (db) => {
+      const rows = await db.query("SELECT * FROM work_task_notifications WHERE tenant_id=$1 AND id=$2", [tenantId, id]);
+      return rows[0] ? mapNotification(rows[0]) : null;
+    });
+  }
+
+  /** 幂等：只把未读置为已读，不覆盖更早的 read_at。 */
+  async markNotificationRead(tenantId: string, id: string, recipientId: string, readAt: string) {
+    return this.database.withTenant(tenantId, async (db) => {
+      const rows = await db.query(
+        "UPDATE work_task_notifications SET read_at=$4 WHERE tenant_id=$1 AND id=$2 AND recipient_id=$3 AND read_at IS NULL RETURNING id",
+        [tenantId, id, recipientId, readAt],
+      );
+      if (rows.length) return true;
+      const existing = await db.query("SELECT id FROM work_task_notifications WHERE tenant_id=$1 AND id=$2 AND recipient_id=$3", [tenantId, id, recipientId]);
+      return existing.length > 0;
+    });
+  }
+
+  async markAllNotificationsRead(tenantId: string, recipientId: string, readAt: string) {
+    return this.database.withTenant(tenantId, async (db) => {
+      const rows = await db.query(
+        "UPDATE work_task_notifications SET read_at=$3 WHERE tenant_id=$1 AND recipient_id=$2 AND read_at IS NULL RETURNING id",
+        [tenantId, recipientId, readAt],
+      );
+      return rows.length;
     });
   }
 
@@ -356,13 +412,14 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
     return this.database.withTenant(tenantId, async (db) => (await db.query("SELECT * FROM work_message_events WHERE tenant_id=$1 AND sequence>$2 ORDER BY sequence LIMIT $3", [tenantId,after,limit])).map(mapMessageEvent));
   }
 
-  private async updatePackage(tenantId: string, value: WorkPackage, expectedVersion: number, event: Omit<WorkTaskEvent, "sequence">, predicate: string) {
+  private async updatePackage(tenantId: string, value: WorkPackage, expectedVersion: number, event: Omit<WorkTaskEvent, "sequence">, predicate: string, notifications: WorkTaskNotification[] = []) {
     return this.database.withTenant(tenantId, async (db) => {
       const rows = await db.query(`UPDATE work_packages SET assignee_id=$3,target_org_unit_id=$4,status=$5,evidence_refs=$6,blocked_reason=$7,claimed_at=$8,completed_at=$9,version=$10,updated_at=$11
         WHERE tenant_id=$1 AND id=$2 AND version=$12 AND ${predicate} RETURNING id`,
         [tenantId,value.id,value.assigneeId ?? null,value.targetOrgUnitId ?? null,value.status,value.evidenceRefs,value.blockedReason ?? null,value.claimedAt ?? null,value.completedAt ?? null,value.version,value.updatedAt,expectedVersion]);
       if (!rows.length) return false;
       await this.insertEvent(db, event);
+      for (const item of notifications) await this.insertNotification(db, item);
       return true;
     });
   }
@@ -381,5 +438,12 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
   private async insertMessageEvent(db: DatabaseExecutor, value: Omit<WorkMessageEvent, "sequence">) {
     await db.query(`INSERT INTO work_message_events(id,tenant_id,pool_scope,org_unit_id,message_id,event_type,actor_id,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
       [value.id,value.tenantId,value.poolScope,value.orgUnitId ?? null,value.messageId,value.eventType,value.actorId,value.occurredAt]);
+  }
+
+  /** 与业务变更同事务写入；同一事件对同一收件人只留一条。 */
+  private async insertNotification(db: DatabaseExecutor, value: WorkTaskNotification) {
+    await db.query(`INSERT INTO work_task_notifications(id,tenant_id,recipient_id,actor_id,kind,title,body,ref_type,ref_id,package_id,source_event_id,created_at,read_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (tenant_id, recipient_id, source_event_id) DO NOTHING`,
+      [value.id,value.tenantId,value.recipientId,value.actorId,value.kind,value.title,value.body,value.refType,value.refId,value.packageId,value.sourceEventId,value.createdAt,value.readAt ?? null]);
   }
 }

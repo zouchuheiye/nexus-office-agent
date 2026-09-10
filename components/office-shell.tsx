@@ -3,6 +3,7 @@
 import {
   ArrowRight,
   Activity,
+  Bell,
   Bot,
   BriefcaseBusiness,
   CheckCircle2,
@@ -55,6 +56,7 @@ import { PiGovernanceConsole } from "@/components/pi-governance-console";
 import { PiOperationsConsole } from "@/components/pi-operations-console";
 import { AgentDevelopmentWorkflow } from "@/components/agent-development-workflow";
 import { ProposalAmendEditor } from "@/components/proposal-amend-editor";
+import { useNotificationBadge } from "@/components/workspace-client";
 
 type NavItem = { id: string; label: string; icon: LucideIcon };
 type WorkspaceProject = {
@@ -218,6 +220,9 @@ export function OfficeShell() {
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
   const [bootstrapError, setBootstrapError] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  // P4：全局未读角标 + 把工作台右栏切到通知页签的递增信号。
+  const { unreadCount } = useNotificationBadge();
+  const [notificationRequest, setNotificationRequest] = useState(0);
   const [snapshot, setSnapshot] = useState<ManagementSnapshot | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [snapshotError, setSnapshotError] = useState("");
@@ -518,6 +523,7 @@ export function OfficeShell() {
         onAmendProposal={(proposal) => void openAmendDraft(proposal)}
         onHydrate={hydratePrimaryConversation}
         onNotice={showNotice}
+        notificationRequest={notificationRequest}
       />
     </>,
     coding: () => <PiCodingWorkbench workspaceId={selectedProjectId} onNotice={showNotice} />,
@@ -588,7 +594,7 @@ export function OfficeShell() {
           <button className="icon-button mobile-menu" aria-label="打开导航" onClick={() => setMobileNav(true)}><Menu size={19} /></button>
           <div className="breadcrumb"><span>{identity?.tenantName ?? "企业工作区"}</span><ChevronRight size={13} /><strong>{activeLabel}</strong></div>
           <button className="global-search" onClick={() => setSearchOpen(true)}><Search size={16} /><span>搜索已授权项目，或发起管理指令…</span><kbd><Command size={11} /> K</kbd></button>
-          <div className="top-actions">{active === "command" ? <span className="command-presence"><i />在线</span> : active === "coding" ? <span className="command-presence"><i />Pi 控制面</span> : active === "agent-development" ? <span className="command-presence"><i />研发门禁生效</span> : <button className="agent-toggle" aria-label={agentOpen ? "收起 AI" : "打开 AI"} onClick={() => setAgentPreference(!agentOpen)}>{agentOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}<span>{agentOpen ? "收起 AI" : "打开 AI"}</span></button>}</div>
+          <div className="top-actions"><button className="notification-bell" type="button" aria-label={unreadCount ? `站内通知：${unreadCount} 条未读` : "站内通知"} onClick={() => { chooseNav("command"); setNotificationRequest((current) => current + 1); }}><Bell size={17} />{unreadCount ? <b>{unreadCount > 99 ? "99+" : unreadCount}</b> : null}</button>{active === "command" ? <span className="command-presence"><i />在线</span> : active === "coding" ? <span className="command-presence"><i />Pi 控制面</span> : active === "agent-development" ? <span className="command-presence"><i />研发门禁生效</span> : <button className="agent-toggle" aria-label={agentOpen ? "收起 AI" : "打开 AI"} onClick={() => setAgentPreference(!agentOpen)}>{agentOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}<span>{agentOpen ? "收起 AI" : "打开 AI"}</span></button>}</div>
         </header>
 
         <section className="content-canvas">

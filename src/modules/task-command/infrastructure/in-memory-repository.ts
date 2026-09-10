@@ -1,5 +1,5 @@
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
-import { createWorkConversation, type WorkArtifact, type WorkArtifactVersion, type WorkConversation, type WorkConversationMessage, type WorkMessageEvent, type WorkMission, type WorkOrgUnit, type WorkPackage, type WorkPackageSubtask, type WorkPerson, type WorkPoolFeedback, type WorkPoolMessage, type WorkTaskEvent, type WorkTaskHandoff } from "@/src/modules/task-command/domain/task-command";
+import { createWorkConversation, type WorkArtifact, type WorkArtifactVersion, type WorkConversation, type WorkConversationMessage, type WorkMessageEvent, type WorkMission, type WorkOrgUnit, type WorkPackage, type WorkPackageSubtask, type WorkPerson, type WorkPoolFeedback, type WorkPoolMessage, type WorkTaskEvent, type WorkTaskHandoff, type WorkTaskNotification } from "@/src/modules/task-command/domain/task-command";
 import { DEMO_MANAGER_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
 
 export const DEMO_DELIVERY_OWNER_ID = "10000000-0000-4000-8000-000000000002";
@@ -23,6 +23,7 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
   private readonly poolMessages: WorkPoolMessage[] = [];
   private readonly poolFeedback: WorkPoolFeedback[] = [];
   private readonly messageEvents: WorkMessageEvent[] = [];
+  private readonly notifications: WorkTaskNotification[] = [];
   private sequence = 0;
   private messageSequence = 0;
   private readonly orgUnits: WorkOrgUnit[] = [
@@ -116,12 +117,13 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
     return true;
   }
 
-  async publishMission(mission: WorkMission, packages: WorkPackage[], events: Omit<WorkTaskEvent, "sequence">[]) {
+  async publishMission(mission: WorkMission, packages: WorkPackage[], events: Omit<WorkTaskEvent, "sequence">[], notifications: WorkTaskNotification[] = []) {
     const existing = mission.sourceRunId ? this.missions.find((item) => item.tenantId === mission.tenantId && item.sourceRunId === mission.sourceRunId) : undefined;
     if (existing) return { mission: structuredClone(existing), packages: structuredClone(this.packages.filter((item) => item.missionId === existing.id)), created: false };
     this.missions.push(structuredClone(mission));
     this.packages.push(...structuredClone(packages));
     for (const item of events) this.events.push({ ...structuredClone(item), sequence: ++this.sequence });
+    for (const item of notifications) this.insertNotification(item);
     return { mission: structuredClone(mission), packages: structuredClone(packages), created: true };
   }
 
@@ -135,12 +137,12 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
     return true;
   }
 
-  async claimPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number }) {
-    return this.updatePackage(input.current, input.next, input.expectedVersion, input.event);
+  async claimPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number; notifications?: WorkTaskNotification[] }) {
+    return this.updatePackage(input.current, input.next, input.expectedVersion, input.event, input.notifications);
   }
 
-  async transitionPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number }) {
-    return this.updatePackage(input.current, input.next, input.expectedVersion, input.event);
+  async transitionPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number; notifications?: WorkTaskNotification[] }) {
+    return this.updatePackage(input.current, input.next, input.expectedVersion, input.event, input.notifications);
   }
 
   async listEvents(tenantId: string, actorId: string, after: number, limit: number) {
@@ -186,30 +188,73 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
     return true;
   }
 
-  async initiateHandoff(handoff: WorkTaskHandoff, event: Omit<WorkTaskEvent, "sequence">) {
+  async initiateHandoff(handoff: WorkTaskHandoff, event: Omit<WorkTaskEvent, "sequence">, notifications: WorkTaskNotification[] = []) {
     const existing = handoff.sourceRunId ? this.handoffs.find((item) => item.tenantId === handoff.tenantId && item.sourceRunId === handoff.sourceRunId) : undefined;
     if (existing) return { handoff: structuredClone(existing), created: false };
     this.handoffs.push(structuredClone(handoff));
     this.events.push({ ...structuredClone(event), sequence: ++this.sequence });
+    for (const item of notifications) this.insertNotification(item);
     return { handoff: structuredClone(handoff), created: true };
   }
 
-  async respondToHandoff(input: { current: WorkTaskHandoff; next: WorkTaskHandoff; currentPackage: WorkPackage; nextPackage?: WorkPackage; expectedVersion: number; event: Omit<WorkTaskEvent, "sequence"> }) {
+  async respondToHandoff(input: { current: WorkTaskHandoff; next: WorkTaskHandoff; currentPackage: WorkPackage; nextPackage?: WorkPackage; expectedVersion: number; event: Omit<WorkTaskEvent, "sequence">; notifications?: WorkTaskNotification[] }) {
     const handoffIndex = this.handoffs.findIndex((item) => item.tenantId === input.current.tenantId && item.id === input.current.id && item.status === "pending");
     const packageIndex = this.packages.findIndex((item) => item.tenantId === input.currentPackage.tenantId && item.id === input.currentPackage.id && item.version === input.expectedVersion && item.assigneeId === input.current.fromAssigneeId);
     if (handoffIndex < 0 || packageIndex < 0) return false;
     this.handoffs[handoffIndex] = structuredClone(input.next);
     if (input.nextPackage) this.packages[packageIndex] = structuredClone(input.nextPackage);
     this.events.push({ ...structuredClone(input.event), sequence: ++this.sequence });
+    for (const item of input.notifications ?? []) this.insertNotification(item);
     return true;
   }
 
-  private async updatePackage(current: WorkPackage, next: WorkPackage, expectedVersion: number, event: Omit<WorkTaskEvent, "sequence">) {
+  async listNotifications(tenantId: string, recipientId: string, options: { unreadOnly?: boolean; limit: number }) {
+    const limit = Math.min(Math.max(options.limit, 1), 100);
+    return structuredClone(this.notifications
+      .filter((item) => item.tenantId === tenantId && item.recipientId === recipientId && (options.unreadOnly !== true || !item.readAt))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id))
+      .slice(0, limit));
+  }
+
+  async countUnreadNotifications(tenantId: string, recipientId: string) {
+    return this.notifications.filter((item) => item.tenantId === tenantId && item.recipientId === recipientId && !item.readAt).length;
+  }
+
+  async getNotification(tenantId: string, id: string) {
+    return structuredClone(this.notifications.find((item) => item.tenantId === tenantId && item.id === id) ?? null);
+  }
+
+  async markNotificationRead(tenantId: string, id: string, recipientId: string, readAt: string) {
+    const index = this.notifications.findIndex((item) => item.tenantId === tenantId && item.id === id && item.recipientId === recipientId);
+    if (index < 0) return false;
+    if (!this.notifications[index].readAt) this.notifications[index] = { ...this.notifications[index], readAt };
+    return true;
+  }
+
+  async markAllNotificationsRead(tenantId: string, recipientId: string, readAt: string) {
+    let updated = 0;
+    for (let index = 0; index < this.notifications.length; index += 1) {
+      const item = this.notifications[index];
+      if (item.tenantId !== tenantId || item.recipientId !== recipientId || item.readAt) continue;
+      this.notifications[index] = { ...item, readAt };
+      updated += 1;
+    }
+    return updated;
+  }
+
+  private async updatePackage(current: WorkPackage, next: WorkPackage, expectedVersion: number, event: Omit<WorkTaskEvent, "sequence">, notifications: WorkTaskNotification[] = []) {
     const index = this.packages.findIndex((item) => item.tenantId === current.tenantId && item.id === current.id);
     if (index < 0 || this.packages[index].version !== expectedVersion) return false;
     this.packages[index] = structuredClone(next);
     this.events.push({ ...structuredClone(event), sequence: ++this.sequence });
+    for (const item of notifications) this.insertNotification(item);
     return true;
+  }
+
+  /** 同一事件对同一收件人只保留一条（与 PostgreSQL 唯一约束语义一致）。 */
+  private insertNotification(value: WorkTaskNotification) {
+    if (this.notifications.some((item) => item.tenantId === value.tenantId && item.recipientId === value.recipientId && item.sourceEventId === value.sourceEventId)) return;
+    this.notifications.push(structuredClone(value));
   }
 
   async listPoolMessages(tenantId: string) {
@@ -248,9 +293,9 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
 const runtime = globalThis as typeof globalThis & { __nexusTaskCommandRepository?: InMemoryTaskCommandRepository; __nexusTaskCommandFixtureVersion?: number };
 
 export function getDevelopmentTaskCommandRepository() {
-  if (runtime.__nexusTaskCommandFixtureVersion !== 4) {
+  if (runtime.__nexusTaskCommandFixtureVersion !== 5) {
     runtime.__nexusTaskCommandRepository = new InMemoryTaskCommandRepository();
-    runtime.__nexusTaskCommandFixtureVersion = 4;
+    runtime.__nexusTaskCommandFixtureVersion = 5;
   }
   return runtime.__nexusTaskCommandRepository!;
 }

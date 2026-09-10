@@ -474,6 +474,28 @@ kbd { display: inline-flex; align-items: center; gap: 2px; padding: 3px 5px; col
 .icon-button:hover { background: var(--paper-muted); border-color: var(--rule-subtle); }
 .top-actions .icon-button i { position: absolute; width: 5px; height: 5px; top: 6px; right: 6px; background: var(--cinnabar); border: 1px solid var(--paper); border-radius: 50%; }
 .agent-toggle { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; background: var(--paper-raised); border: 1px solid var(--rule); border-radius: var(--radius-small); cursor: pointer; font-size: 11px; }
+/* P4 站内通知：全局未读铃铛 */
+.notification-bell { position: relative; display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; color: var(--ink-soft); background: transparent; border: 1px solid transparent; border-radius: var(--radius-small); cursor: pointer; }
+.notification-bell:hover { color: var(--ink); background: var(--paper-muted); border-color: var(--rule-subtle); }
+.notification-bell b { position: absolute; top: 1px; right: 0; min-width: 15px; padding: 0 3px; color: #fff; background: var(--cinnabar); border: 1px solid var(--paper); border-radius: 999px; font-size: 9px; font-weight: 700; line-height: 14px; text-align: center; }
+.task-rail-badge { color: #fff !important; background: var(--cinnabar); border-radius: 999px; padding: 0 5px; }
+.notification-list { display: grid; gap: 8px; }
+.notification-list-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 2px 6px; color: var(--ink-faint); font-size: 9px; letter-spacing: .04em; }
+.notification-list-head b { color: var(--cinnabar); font-size: 11px; }
+.notification-list-head button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; color: var(--ink-soft); background: var(--paper-raised); border: 1px solid var(--rule-subtle); border-radius: 999px; cursor: pointer; font-size: 10px; }
+.notification-card { display: grid; gap: 5px; padding: 10px 11px; background: var(--paper-raised); border: 1px solid var(--rule-subtle); border-radius: var(--radius-small); }
+.notification-card.is-unread { border-color: var(--cinnabar-soft, var(--rule)); box-shadow: inset 2px 0 0 var(--cinnabar); }
+.notification-card-top { display: flex; align-items: center; gap: 6px; }
+.notification-kind { padding: 1px 6px; color: var(--ink-soft); background: var(--paper-muted); border-radius: 999px; font-size: 9px; letter-spacing: .04em; }
+.notification-card.is-unread .notification-kind { color: #fff; background: var(--cinnabar); }
+.notification-dot { width: 6px; height: 6px; background: var(--cinnabar); border-radius: 50%; }
+.notification-card-top small { margin-left: auto; color: var(--ink-faint); font-size: 9px; }
+.notification-card h4 { margin: 0; font-size: 12px; line-height: 1.45; }
+.notification-card p { margin: 0; color: var(--ink-soft); font-size: 10.5px; line-height: 1.6; }
+.notification-card footer { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.notification-card footer button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; color: var(--ink-soft); background: transparent; border: 1px solid var(--rule-subtle); border-radius: 999px; cursor: pointer; font-size: 10px; }
+.notification-card footer button.notification-open { color: var(--cinnabar); border-color: var(--cinnabar); }
+.notification-card footer button:hover { background: var(--paper-muted); }
 .mobile-menu { display: none; }
 
 .content-canvas { padding: 30px clamp(22px, 3.2vw, 48px) 56px; }

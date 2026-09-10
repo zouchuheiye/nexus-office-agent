@@ -1,4 +1,4 @@
-import type { WorkArtifact, WorkArtifactVersion, WorkConversation, WorkConversationMessage, WorkMessageEvent, WorkMission, WorkOrgUnit, WorkPackage, WorkPackageSubtask, WorkPerson, WorkPoolFeedback, WorkPoolMessage, WorkTaskEvent, WorkTaskHandoff } from "@/src/modules/task-command/domain/task-command";
+import type { WorkArtifact, WorkArtifactVersion, WorkConversation, WorkConversationMessage, WorkMessageEvent, WorkMission, WorkOrgUnit, WorkPackage, WorkPackageSubtask, WorkPerson, WorkPoolFeedback, WorkPoolMessage, WorkTaskEvent, WorkTaskHandoff, WorkTaskNotification } from "@/src/modules/task-command/domain/task-command";
 
 export interface TaskCommandRepository {
   getOrCreatePrimaryConversation(tenantId: string, ownerId: string): Promise<WorkConversation>;
@@ -13,10 +13,10 @@ export interface TaskCommandRepository {
   listPackageSubtaskProgress(tenantId: string, packageIds: string[]): Promise<Array<{ packageId: string; done: number; total: number }>>;
   savePackageSubtask(subtask: WorkPackageSubtask, event: Omit<WorkTaskEvent, "sequence">): Promise<boolean>;
   deletePackageSubtask(tenantId: string, packageId: string, subtaskId: string, expectedVersion: number, event: Omit<WorkTaskEvent, "sequence">): Promise<boolean>;
-  publishMission(mission: WorkMission, packages: WorkPackage[], events: Omit<WorkTaskEvent, "sequence">[]): Promise<{ mission: WorkMission; packages: WorkPackage[]; created: boolean }>;
+  publishMission(mission: WorkMission, packages: WorkPackage[], events: Omit<WorkTaskEvent, "sequence">[], notifications?: WorkTaskNotification[]): Promise<{ mission: WorkMission; packages: WorkPackage[]; created: boolean }>;
   updateTaskTemplate(input: { currentMission: WorkMission; nextMission: WorkMission; currentPackage: WorkPackage; nextPackage: WorkPackage; expectedVersion: number; event: Omit<WorkTaskEvent, "sequence"> }): Promise<boolean>;
-  claimPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number }): Promise<boolean>;
-  transitionPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number }): Promise<boolean>;
+  claimPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number; notifications?: WorkTaskNotification[] }): Promise<boolean>;
+  transitionPackage(input: { current: WorkPackage; next: WorkPackage; event: Omit<WorkTaskEvent, "sequence">; expectedVersion: number; notifications?: WorkTaskNotification[] }): Promise<boolean>;
   listEvents(tenantId: string, actorId: string, after: number, limit: number): Promise<WorkTaskEvent[]>;
   listPackageEvents(tenantId: string, packageId: string): Promise<WorkTaskEvent[]>;
   listHandoffs(tenantId: string, packageIds: string[]): Promise<WorkTaskHandoff[]>;
@@ -25,8 +25,13 @@ export interface TaskCommandRepository {
   getArtifact(tenantId: string, id: string): Promise<WorkArtifact | null>;
   getArtifactVersions(tenantId: string, artifactIds: string[]): Promise<WorkArtifactVersion[]>;
   appendArtifactVersion(artifact: WorkArtifact, version: WorkArtifactVersion, expectedVersion: number): Promise<boolean>;
-  initiateHandoff(handoff: WorkTaskHandoff, event: Omit<WorkTaskEvent, "sequence">): Promise<{ handoff: WorkTaskHandoff; created: boolean }>;
-  respondToHandoff(input: { current: WorkTaskHandoff; next: WorkTaskHandoff; currentPackage: WorkPackage; nextPackage?: WorkPackage; expectedVersion: number; event: Omit<WorkTaskEvent, "sequence"> }): Promise<boolean>;
+  initiateHandoff(handoff: WorkTaskHandoff, event: Omit<WorkTaskEvent, "sequence">, notifications?: WorkTaskNotification[]): Promise<{ handoff: WorkTaskHandoff; created: boolean }>;
+  respondToHandoff(input: { current: WorkTaskHandoff; next: WorkTaskHandoff; currentPackage: WorkPackage; nextPackage?: WorkPackage; expectedVersion: number; event: Omit<WorkTaskEvent, "sequence">; notifications?: WorkTaskNotification[] }): Promise<boolean>;
+  listNotifications(tenantId: string, recipientId: string, options: { unreadOnly?: boolean; limit: number }): Promise<WorkTaskNotification[]>;
+  countUnreadNotifications(tenantId: string, recipientId: string): Promise<number>;
+  getNotification(tenantId: string, id: string): Promise<WorkTaskNotification | null>;
+  markNotificationRead(tenantId: string, id: string, recipientId: string, readAt: string): Promise<boolean>;
+  markAllNotificationsRead(tenantId: string, recipientId: string, readAt: string): Promise<number>;
   listPoolMessages(tenantId: string): Promise<WorkPoolMessage[]>;
   listPoolFeedback(tenantId: string, messageIds: string[]): Promise<WorkPoolFeedback[]>;
   getPoolMessage(tenantId: string, id: string): Promise<WorkPoolMessage | null>;
