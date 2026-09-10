@@ -60,10 +60,23 @@ function isCollaborationFile(path) {
   return (
     normalized === "AGENTS.md" ||
     normalized.startsWith(".ai-team/") ||
+    normalized.startsWith(".project-to-act/") ||
     normalized.startsWith(".github/PULL_REQUEST_TEMPLATE/") ||
     normalized === ".github/workflows/repo-task-sync.yml"
   );
 }
+
+function isLedgerFile(path) {
+  return path.replaceAll("\\", "/").startsWith(".project-to-act/");
+}
+
+/** 台账落实要求：PROJECT_PROGRESS.md 记录每一次交付；其余三份按动静同步。 */
+const LEDGER_FILES = [
+  ".project-to-act/PROJECT_PROGRESS.md",
+  ".project-to-act/PROJECT_FEATURES.md",
+  ".project-to-act/PROJECT_VERSIONS.md",
+  ".project-to-act/PROJECT_ACCEPTANCE.md",
+];
 
 export function validateRepository({ root = process.cwd(), base = null } = {}) {
   const absoluteRoot = resolve(root);
@@ -149,6 +162,15 @@ export function validateRepository({ root = process.cwd(), base = null } = {}) {
       const nonCollaborationFiles = files.filter((path) => !isCollaborationFile(path));
       if (nonCollaborationFiles.length > 0 && !files.includes(".ai-team/TASK.md")) {
         errors.push("Code or product files changed without updating .ai-team/TASK.md in the same PR");
+      }
+      // 项目台账（project-to-act）必须随每个交付批次更新，和 TASK.md 同等强制；
+      // 台账目录不存在（例如公开快照）时不适用。
+      const ledgerAvailable = existsSync(resolve(absoluteRoot, LEDGER_FILES[0]));
+      if (ledgerAvailable) {
+        const touchedLedger = files.filter((path) => isLedgerFile(path));
+        if (nonCollaborationFiles.length > 0 && !touchedLedger.includes(LEDGER_FILES[0])) {
+          errors.push("Code or product files changed without recording the batch in .project-to-act/PROJECT_PROGRESS.md");
+        }
       }
 
       const numstat = git(absoluteRoot, ["diff", "--numstat", base, "--"]) ?? "";

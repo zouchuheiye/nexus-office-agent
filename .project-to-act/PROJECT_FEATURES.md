@@ -102,6 +102,7 @@
 | F-096 | 员工入职登记 Agent 通道 | P0 | 已完成（本地工程范围） | F-095、F-020 | 会话内可用 `organization.list/add/update/deactivate_member`：入职只要求姓名（部门/岗位/邮箱可留空并后续补全），登记不授予任何角色与权限；停用/离职为 R2 待人工确认；工具入参不合规回灌模型纠正而非整轮失败 | E-144 |
 | F-097 | 停用员工的进入权收回 | P0 | 已完成（本地工程范围） | F-095、F-092、F-014 | 员工被停用后不能再进入枢纽 Agent：开发验证身份列表移除该身份、切换返回 `DEMO_IDENTITY_INACTIVE`、已签发会话因非在职被 401 拒绝且不回退为默认身份；生产按 `users.status/archived_at` 判定；停用同一事务收回角色授权、委托、客户端设备与外部身份；档案与历史任务审计保留 | E-145 |
 | F-098 | 成员重新启用 | P0 | 已完成（本地工程范围） | F-095、F-097 | 已停用/离职成员可被重新启用：`GET /organization/members?includeDeparted=true` 列出停用成员，`POST /organization/members/:id/reactivate` 恢复在职并重建现行任职（部门/岗位/负责人可指定，留空沿用停用前设置，版本 CAS）；只恢复在职与任职，不自动回滚停用时收回的角色授权/委托/设备/外部身份；会话与身份切换随之恢复 | E-146 |
+| F-099 | project-to-act 台账强制门禁 | P0 | 已完成（本地工程范围） | F-011 | 每次交付必须写台账：`check.mjs --base` 在"改了代码/产品文件但 `.project-to-act/PROJECT_PROGRESS.md` 未更新"时判 blocked（与 TASK.md 同级）；AGENTS.md 固化"长期要求"章节说明各台账文件的写入时机 | E-147 |
 ## Pi 模块与函数级实现契约
 
 | 模块 ID | 对应功能 | 实现边界 | 主要接口/类 | 必须实现的函数与语义 | 持久化/事件 | 安全与失败策略 | Gate |
@@ -484,6 +485,8 @@
 - 2026-09-09：新增 F-095“成员管理（员工目录）”，形成 E-143。`organization` 模块新增 member-directory 纵切（域不变量/应用服务/Postgres+InMemory 仓储/runtime）与 HTTP `GET/POST /organization/members`、`PATCH/DELETE /organization/members/:id`；读 `organization_member:read`、写 `organization_member:admin`；邮箱租户唯一、岗位归属部门、版本 CAS、禁止停用自己、有进行中任务禁止停用；停用为软删除并保留历史与审计。“组织与人才”页并入“成员管理”卡片（目录 + 新增/编辑对话框 + 停用二次确认）。验证：单测 13 项、PGlite 集成（CRUD/RLS/审计/在岗保护/邮箱唯一）通过，全量 541 项通过，真实 dev server 新增→任务人员可见→编辑→停用 链路通过。
 
 - 2026-09-10：新增 F-096“员工入职登记 Agent 通道”，形成 E-144。会话内新增 `organization.list_members`/`add_member`/`update_member`/`deactivate_member` 与 `organization-member-directory` Skill：入职登记只要求姓名（部门/岗位/邮箱可留空、后续补全），只建立名册记录、不授予角色或权限，停用/离职仍需人工确认。修复两处通用缺陷：`filterToolsByIntent` 核心技能白名单未含新技能导致工具在注入模型前被裁掉；工具入参不合规会把整轮对话打成 422（改为回灌模型纠正重试）。真实会话验证：用户说“今天新入职了一名员工叫张三”，Agent 调用 `organization.add_member` 仅凭姓名登记张三（active、v1、部门/岗位留空），成员目录与任务可指派人员列表均可查到。验证：typecheck 0、lint 0、新增工具单测 6 项、全量 548 项通过、dev server 真实 E2E 通过。遗留：正式环境需在 roles/permissions 预置 `organization_member:admin/read`（当前仅开发白名单可用，默认失败关闭）。
+
+- 2026-09-10：新增 F-099“project-to-act 台账强制门禁”，形成 E-147。用户要求台账必须一直写；此前只有约定没有校验，导致 2026-09-09~10 一整批交付（P0~P3、成员管理、Cookie 修复）漏记。现在 `.ai-team/check.mjs --base` 在比对 Git 变更时，若存在代码/产品文件变更而 `.project-to-act/PROJECT_PROGRESS.md` 未更新，直接判 blocked；`.project-to-act/` 归入协作文件（不额外要求 TASK.md），台账目录不存在时不适用；AGENTS.md 增补“长期要求”章节说明 PROGRESS 每次必写、FEATURES/VERSIONS/ACCEPTANCE 按适用性同步。验证：新增 `tests/integration/project-ledger-gate.test.ts` 2 项（只改代码不写台账 → exit 1 + Result: blocked；代码与台账同批 → exit 0 + Result: valid）通过，真实仓库 `check.mjs --base 1ee59d8` 为 valid。
 
 - 2026-09-10：新增 F-098“成员重新启用”，形成 E-146。为软停用补齐可逆路径：`GET /organization/members?includeDeparted=true` 返回已停用成员（默认只返回在职），`POST /organization/members/:id/reactivate` 按版本 CAS 把 `departed` 恢复为 `active` 并清空 `archived_at`，同时重建现行任职（部门/岗位/负责人可指定，留空沿用停用前最后一次任职，通过新增的 `lastMembership` 读取）；成员管理页新增“已停用成员”分区与「重新启用」对话框；Agent 侧新增 `organization.reactivate_member`（R2、强制人工确认）。边界：只恢复在职与任职，停用时被收回的角色授权、委托、设备与外部身份不自动回滚（原到期时间已被覆盖，无法精确还原），需管理员重新授予或重新登录/重新绑定。验证：域/服务单测、Agent 工具单测、Postgres 集成（状态与实体任职重建）与身份门禁补充用例通过；真实 dev server 复核把先前停用的陈屿恢复为运营中心/运营负责人（版本 2→3），切换器与任务可指派人员列表随之恢复。遗留：历史已停用数据若在收权逻辑上线前停用，其角色授权行仍为未到期（不影响当前判定）。
 
