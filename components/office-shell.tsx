@@ -288,7 +288,9 @@ export function OfficeShell() {
 
   const hydratePrimaryConversation = useCallback((conversationId: string, persistedMessages: AgentMessage[]) => {
     setPrimaryConversationId(conversationId);
-    if (persistedMessages.length) setMessages(persistedMessages);
+    // 没有历史消息时要显式清空：否则初始那句占位问候会一直留在列表里，
+    // 让"新用户"永远看不到对话欢迎区与空态引导（真实浏览器验证发现的缺陷）。
+    setMessages(persistedMessages);
   }, []);
 
   const activeLabel = useMemo(() => active === "integrations" ? "系统与集成" : active === "client" ? "设备与客户端" : active === "enterprise-governance" ? "权限与治理" : primaryNav.find(({ id }) => id === active)?.label ?? "项目管理", [active]);
