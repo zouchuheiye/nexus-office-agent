@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, LoaderCircle, Pencil, Plus, Trash2, UserRoundPlus, Users } from "lucide-react";
+import { Check, LoaderCircle, Pencil, Plus, RotateCcw, Trash2, UserRoundPlus, Users } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 type OrgUnit = { id: string; name: string };
@@ -25,10 +25,13 @@ export function MemberDirectoryCard({ onNotice }: { onNotice: (message: string) 
   const [editing, setEditing] = useState<Member | null>(null);
   const [draft, setDraft] = useState(editorDefaults());
   const [confirmRemove, setConfirmRemove] = useState("");
+  const [reactivating, setReactivating] = useState<Member | null>(null);
+  const [reactivateDraft, setReactivateDraft] = useState({ orgUnitId: "", positionId: "", isManager: false });
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch("/api/v1/organization/members", { cache: "no-store" });
+      // includeDeparted=true：已停用成员也要列出来，才能重新启用。
+      const response = await fetch("/api/v1/organization/members?includeDeparted=true", { cache: "no-store" });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "成员目录加载失败");
       setDirectory(payload.data);
@@ -92,17 +95,44 @@ export function MemberDirectoryCard({ onNotice }: { onNotice: (message: string) 
     finally { setBusy(false); }
   }
 
+  async function reactivate(event: FormEvent) {
+    event.preventDefault();
+    const member = reactivating;
+    if (!member || busy) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/v1/organization/members/${member.id}/reactivate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          expectedVersion: member.version,
+          orgUnitId: reactivateDraft.orgUnitId || undefined,
+          positionId: reactivateDraft.positionId || undefined,
+          isManager: reactivateDraft.isManager,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || "重新启用失败");
+      onNotice(`已重新启用 ${member.displayName}（恢复在职与任职；角色授权/设备需另行授予或重新登录）`);
+      setReactivating(null);
+      await load();
+    } catch (cause) { onNotice(cause instanceof Error ? cause.message : "重新启用失败"); }
+    finally { setBusy(false); }
+  }
+
+  const activeMembers = directory?.members.filter((member) => member.status !== "departed") ?? [];
+  const departedMembers = directory?.members.filter((member) => member.status === "departed") ?? [];
   const positionsInOrg = (orgUnitId: string) => directory?.positions.filter((position) => position.orgUnitId === orgUnitId) ?? [];
 
   return <section className="enterprise-card member-directory-card">
     <div className="enterprise-card-head">
-      <div><span><Users size={16} /></span><div><h2>成员管理</h2><p>员工目录 · 新增/编辑/停用即时生效并同步到任务与组织数据</p></div></div>
+      <div><span><Users size={16} /></span><div><h2>成员管理</h2><p>员工目录 · 新增/编辑/停用/重新启用即时生效并同步到任务与组织数据</p></div></div>
       {directory?.canManage ? <button type="button" className="member-add-button" onClick={openCreate}><UserRoundPlus size={14} />新增成员</button> : null}
     </div>
-    {loading ? <div className="member-directory-loading"><LoaderCircle className="spin" size={15} />正在加载成员目录…</div> : !directory ? <p className="task-subtask-hint">成员目录不可用（需要组织成员查看权限）。</p> : directory.members.length === 0 ? <p className="task-subtask-hint">还没有在职成员，请先新增。</p> : (
+    {loading ? <div className="member-directory-loading"><LoaderCircle className="spin" size={15} />正在加载成员目录…</div> : !directory ? <p className="task-subtask-hint">成员目录不可用（需要组织成员查看权限）。</p> : (activeMembers.length === 0 && departedMembers.length === 0) ? <p className="task-subtask-hint">还没有在职成员，请先新增。</p> : (
       <div className="member-directory-table">
         <div className="member-directory-row member-directory-head"><span>成员</span><span>组织与岗位</span><span>状态</span>{directory.canManage ? <span>操作</span> : null}</div>
-        {directory.members.map((member) => <div className="member-directory-row" key={member.id}>
+        {activeMembers.map((member) => <div className="member-directory-row" key={member.id}>
           <span><strong>{member.displayName}</strong><small>{member.email || "未设置邮箱"}{member.isManager ? " · 负责人" : ""}</small></span>
           <span><strong>{member.orgUnitName ?? "未分组织"}</strong><small>{member.positionName ?? "未设岗位"}</small></span>
           <span className={`member-status is-${member.status}`}>{statusCopy[member.status]}</span>
@@ -111,9 +141,30 @@ export function MemberDirectoryCard({ onNotice }: { onNotice: (message: string) 
             <button type="button" className={`member-remove${confirmRemove === member.id ? " is-armed" : ""}`} aria-label={`停用 ${member.displayName}`} disabled={busy} onClick={() => { if (confirmRemove === member.id) void remove(member); else setConfirmRemove(member.id); }}>{confirmRemove === member.id ? "确认停用？" : <Trash2 size={13} />}</button>
           </span> : null}
         </div>)}
+        {departedMembers.length ? <>
+          <div className="member-directory-row member-directory-head member-directory-departed-head"><span>已停用成员 · {departedMembers.length}</span><span>停用后不能进入枢纽 Agent</span><span>状态</span>{directory.canManage ? <span>操作</span> : null}</div>
+          {departedMembers.map((member) => <div className="member-directory-row is-departed" key={member.id}>
+            <span><strong>{member.displayName}</strong><small>{member.email || "未设置邮箱"}</small></span>
+            <span><strong>留空则沿用停用前任职</strong><small>恢复后可重新分配部门与岗位</small></span>
+            <span className={`member-status is-${member.status}`}>{statusCopy[member.status]}</span>
+            {directory.canManage ? <span className="member-row-actions">
+              <button type="button" aria-label={`重新启用 ${member.displayName}`} disabled={busy} onClick={() => { setReactivating(member); setReactivateDraft({ orgUnitId: "", positionId: "", isManager: false }); }}><RotateCcw size={13} />重新启用</button>
+            </span> : null}
+          </div>)}
+        </> : null}
       </div>
     )}
-    <p className="member-directory-note"><Check size={12} />停用为软删除：仅结束现行任职并标记离职，历史任务与审计链保留；无法停用仍有进行中任务的成员。</p>
+    <p className="member-directory-note"><Check size={12} />停用为软删除：仅结束现行任职并标记离职，历史任务与审计链保留；无法停用仍有进行中任务的成员。重新启用只恢复在职与任职，停用时收回的角色授权、设备与外部身份需另行授予或重新登录。</p>
+
+    {reactivating ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="member-reactivate-title">
+      <header><div><h2 id="member-reactivate-title">重新启用「{reactivating.displayName}」</h2><p>恢复在职与任职；不自动恢复角色授权、设备与外部身份</p></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setReactivating(null)}>×</button></header>
+      <form onSubmit={reactivate} className="member-editor-form">
+        <label>所在部门<select value={reactivateDraft.orgUnitId} onChange={(event) => setReactivateDraft((current) => ({ ...current, orgUnitId: event.target.value, positionId: "" }))}><option value="">沿用停用前的部门</option>{directory?.orgUnits.map((unit) => <option value={unit.id} key={unit.id}>{unit.name}</option>)}</select></label>
+        <label>岗位（限本部门）<select value={reactivateDraft.positionId} onChange={(event) => setReactivateDraft((current) => ({ ...current, positionId: event.target.value }))} disabled={!reactivateDraft.orgUnitId}><option value="">沿用停用前的岗位</option>{positionsInOrg(reactivateDraft.orgUnitId).map((position) => <option value={position.id} key={position.id}>{position.name}</option>)}</select></label>
+        <label className="member-checkbox"><input type="checkbox" checked={reactivateDraft.isManager} onChange={(event) => setReactivateDraft((current) => ({ ...current, isManager: event.target.checked }))} />恢复为所在部门负责人</label>
+        <footer><button type="button" onClick={() => setReactivating(null)}>取消</button><button type="submit" className="primary" disabled={busy}>{busy ? <LoaderCircle className="spin" size={13} /> : <RotateCcw size={13} />}确认重新启用</button></footer>
+      </form>
+    </section></div> : null}
 
     {open ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="member-editor-title">
       <header><div><h2 id="member-editor-title">{editing ? "编辑成员" : "新增成员"}</h2><p>{editing ? editing.displayName : "姓名、邮箱、组织与岗位"}</p></div><button type="button" className="icon-button" aria-label="关闭" onClick={closeEditor}>×</button></header>

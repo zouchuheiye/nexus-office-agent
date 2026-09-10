@@ -26,6 +26,15 @@ export const updateMemberSchema = z.object({
 
 export const deactivateMemberSchema = z.object({ expectedVersion: z.number().int().positive() }).strict();
 
+/** 重新启用：可指定恢复后的部门/岗位/负责人；留空则沿用停用前的任职。 */
+export const reactivateMemberSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  orgUnitId: z.uuid().optional(),
+  positionId: z.uuid().optional(),
+  isManager: z.boolean().optional(),
+}).strict();
+
 export type CreateMemberInput = z.infer<typeof createMemberSchema>;
 export type UpdateMemberInput = z.infer<typeof updateMemberSchema>;
 export type DeactivateMemberInput = z.infer<typeof deactivateMemberSchema>;
+export type ReactivateMemberInput = z.infer<typeof reactivateMemberSchema>;

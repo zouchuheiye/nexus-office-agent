@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { MemberDirectoryService } from "@/src/modules/organization/application/member-directory-service";
 import { createMemberSchema, updateMemberSchema } from "@/src/modules/organization/application/member-directory-schemas";
-import { assertPositionBelongsToOrg, createMemberProfile, deactivateMember, editMemberProfile } from "@/src/modules/organization/domain/member-directory";
+import { assertPositionBelongsToOrg, createMemberProfile, deactivateMember, editMemberProfile, reactivateMember } from "@/src/modules/organization/domain/member-directory";
 import { InMemoryMemberDirectoryRepository, DEMO_DELIVERY_ORG_ID, DEMO_DELIVERY_POSITION_ID, DEMO_PRODUCT_ORG_ID, DEMO_PRODUCT_POSITION_ID } from "@/src/modules/organization/infrastructure/in-memory-member-directory-repository";
 import { createDevelopmentRequestContext, DEMO_MANAGER_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
 
@@ -48,6 +48,14 @@ describe("member-directory domain", () => {
     expect(() => deactivateMember(departed)).toThrow("MEMBER_ALREADY_DEPARTED");
   });
 
+  it("reactivates only departed members and clears the archive marker", () => {
+    const base = createMemberProfile({ id: "uuid-1", displayName: "周然", orgUnitId: DEMO_DELIVERY_ORG_ID });
+    expect(() => reactivateMember(base)).toThrow("MEMBER_NOT_DEPARTED");
+    const restored = reactivateMember(deactivateMember(base), { orgUnitId: DEMO_PRODUCT_ORG_ID, positionId: DEMO_PRODUCT_POSITION_ID, isManager: true });
+    expect(restored).toMatchObject({ status: "active", orgUnitId: DEMO_PRODUCT_ORG_ID, positionId: DEMO_PRODUCT_POSITION_ID, isManager: true, version: 3 });
+    expect(restored.archivedAt).toBeUndefined();
+  });
+
   it("rejects a position that belongs to another org unit", () => {
     expect(() => assertPositionBelongsToOrg(undefined, DEMO_DELIVERY_ORG_ID)).not.toThrow();
     expect(() => assertPositionBelongsToOrg({ id: DEMO_PRODUCT_POSITION_ID, orgUnitId: DEMO_PRODUCT_ORG_ID, name: "产品负责人", code: "product", status: "active" }, DEMO_DELIVERY_ORG_ID)).toThrow("MEMBER_POSITION_ORG_MISMATCH");
@@ -90,6 +98,40 @@ describe("member-directory service", () => {
     await expect(service.createMember(reader, { displayName: "越权" })).rejects.toThrow("POLICY_DENIED:organization_member:admin");
     await expect(service.updateMember(reader, DELIVERY_OWNER_ID, { expectedVersion: 1, displayName: "越权改名" })).rejects.toThrow("POLICY_DENIED:organization_member:admin");
     await expect(service.deactivateMember(reader, DELIVERY_OWNER_ID, { expectedVersion: 1 })).rejects.toThrow("POLICY_DENIED:organization_member:admin");
+    await expect(service.reactivateMember(reader, DELIVERY_OWNER_ID, { expectedVersion: 2 })).rejects.toThrow("POLICY_DENIED:organization_member:admin");
+  });
+
+  it("admins can reactivate a departed member and choose the restored assignment", async () => {
+    const { service } = await fixture();
+    const actor = manager();
+    const created = await service.createMember(actor, { displayName: "回流员工", orgUnitId: DEMO_DELIVERY_ORG_ID, positionId: DEMO_DELIVERY_POSITION_ID });
+    await service.deactivateMember(actor, created.id, { expectedVersion: 1 });
+    // 已在职的人员不能重复"重新启用"
+    await expect(service.reactivateMember(actor, DELIVERY_OWNER_ID, { expectedVersion: 1 })).rejects.toThrow("MEMBER_NOT_DEPARTED");
+    // 停用期间接口默认不返回，但 includeDeparted 可查到（供重新启用入口使用）
+    expect((await service.list(actor)).members.find(({ id }) => id === created.id)).toBeUndefined();
+    expect((await service.list(actor, { includeDeparted: true })).members.find(({ id }) => id === created.id)).toMatchObject({ status: "departed" });
+
+    // 留空沿用停用前任职
+    const restored = await service.reactivateMember(actor, created.id, { expectedVersion: 2 });
+    expect(restored).toMatchObject({ status: "active", orgUnitName: "交付中心", positionName: "交付负责人", version: 3 });
+    expect((await service.list(actor)).members.find(({ id }) => id === created.id)).toMatchObject({ status: "active" });
+
+    // 再次停用后指定新部门/岗位恢复
+    await service.deactivateMember(actor, created.id, { expectedVersion: 3 });
+    const moved = await service.reactivateMember(actor, created.id, { expectedVersion: 4, orgUnitId: DEMO_PRODUCT_ORG_ID, positionId: DEMO_PRODUCT_POSITION_ID });
+    expect(moved).toMatchObject({ orgUnitName: "产品中心", positionName: "产品负责人" });
+    await expect(service.reactivateMember(actor, created.id, { expectedVersion: 4 })).rejects.toThrow("MEMBER_NOT_DEPARTED");
+  });
+
+  it("rejects reactivation with a stale version or an archived org unit", async () => {
+    const { service } = await fixture();
+    const actor = manager();
+    const created = await service.createMember(actor, { displayName: "版本校验员工", orgUnitId: DEMO_DELIVERY_ORG_ID });
+    await service.deactivateMember(actor, created.id, { expectedVersion: 1 });
+    await expect(service.reactivateMember(actor, created.id, { expectedVersion: 1 })).rejects.toThrow("MEMBER_VERSION_CONFLICT");
+    await expect(service.reactivateMember(actor, created.id, { expectedVersion: 2, orgUnitId: "20000000-0000-4000-8000-0000000000ff" })).rejects.toThrow("MEMBER_ORG_NOT_ACTIVE");
+    await expect(service.reactivateMember(actor, created.id, { expectedVersion: 2, orgUnitId: DEMO_DELIVERY_ORG_ID, positionId: DEMO_PRODUCT_POSITION_ID })).rejects.toThrow("MEMBER_POSITION_ORG_MISMATCH");
   });
 
   it("forbids deactivating yourself so an admin cannot lock the tenant out", async () => {

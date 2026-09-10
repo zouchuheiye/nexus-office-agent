@@ -9,7 +9,9 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   try {
     const context = await resolveRequestContext(request);
-    const data = await getMemberDirectoryService().list(context);
+    // includeDeparted=true 时连已停用成员一起返回，供“重新启用”入口使用。
+    const includeDeparted = new URL(request.url).searchParams.get("includeDeparted") === "true";
+    const data = await getMemberDirectoryService().list(context, { includeDeparted });
     return NextResponse.json({ data, meta: { traceId: context.traceId } });
   } catch (error) { return applicationErrorResponse(error); }
 }

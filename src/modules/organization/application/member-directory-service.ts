@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { assertPositionBelongsToOrg, createMemberProfile, deactivateMember, editMemberProfile, type DirectoryMember } from "@/src/modules/organization/domain/member-directory";
-import type { MemberDirectoryRepository } from "@/src/modules/organization/application/member-directory-contracts";
-import type { CreateMemberInput, DeactivateMemberInput, UpdateMemberInput } from "@/src/modules/organization/application/member-directory-schemas";
+import { assertPositionBelongsToOrg, createMemberProfile, deactivateMember, editMemberProfile, reactivateMember as applyReactivation, type DirectoryMember } from "@/src/modules/organization/domain/member-directory";
+import type { MemberDirectoryQuery, MemberDirectoryRepository, PreviousMembership } from "@/src/modules/organization/application/member-directory-contracts";
+import type { CreateMemberInput, DeactivateMemberInput, ReactivateMemberInput, UpdateMemberInput } from "@/src/modules/organization/application/member-directory-schemas";
 import type { RequestContext } from "@/src/platform/context/request-context";
 
 function hasPermission(context: RequestContext, permission: string): boolean {
@@ -15,9 +15,9 @@ function requirePermission(context: RequestContext, permission: string) {
 export class MemberDirectoryService {
   constructor(private readonly repository: MemberDirectoryRepository) {}
 
-  async list(context: RequestContext) {
+  async list(context: RequestContext, query: MemberDirectoryQuery = {}) {
     requirePermission(context, "organization_member:read");
-    const directory = await this.repository.list(context.tenantId);
+    const directory = await this.repository.list(context.tenantId, query);
     return { ...directory, canManage: hasPermission(context, "organization_member:admin") };
   }
 
@@ -67,6 +67,35 @@ export class MemberDirectoryService {
     if (result === "version") throw new Error("MEMBER_VERSION_CONFLICT");
     if (result === "active_work") throw new Error("MEMBER_HAS_ACTIVE_WORK");
     return { deactivatedMemberId: userId, version: current.version + 1 };
+  }
+
+  /**
+   * 重新启用已停用/离职成员：恢复在职身份与任职（部门/岗位/负责人）。
+   * 只恢复"能重新上班"，不自动恢复停用时收回的角色授权、委托、设备与外部身份——
+   * 那些需要管理员另行授予或重新登录/重新绑定，避免一次误停用变成权限静默回滚。
+   */
+  async reactivateMember(context: RequestContext, userId: string, input: ReactivateMemberInput) {
+    requirePermission(context, "organization_member:admin");
+    const current = await this.repository.get(context.tenantId, userId);
+    if (!current) throw new Error("MEMBER_NOT_FOUND");
+    applyReactivation(current, input); // 域校验：只有在职=departed 才能重新启用
+
+    const previous = await this.repository.lastMembership(context.tenantId, userId);
+    const orgUnitId = input.orgUnitId ?? previous?.orgUnitId ?? current.orgUnitId;
+    const positionId = input.positionId ?? previous?.positionId;
+    let membership: PreviousMembership | null = null;
+    if (orgUnitId) {
+      const options = await this.repository.list(context.tenantId);
+      if (!options.orgUnits.some((unit) => unit.id === orgUnitId)) throw new Error("MEMBER_ORG_NOT_ACTIVE");
+      const position = positionId ? options.positions.find((item) => item.id === positionId) : undefined;
+      assertPositionBelongsToOrg(position, orgUnitId);
+      membership = { orgUnitId, positionId: position?.id, isManager: input.isManager ?? previous?.isManager ?? current.isManager };
+    }
+
+    const result = await this.repository.reactivate(context.tenantId, userId, input.expectedVersion, membership);
+    if (result === "version") throw new Error("MEMBER_VERSION_CONFLICT");
+    if (result === "not_departed") throw new Error("MEMBER_NOT_DEPARTED");
+    return this.repository.get(context.tenantId, userId);
   }
 
   /** UI/内部只读辅助：判断当前主体能否管理目录。 */

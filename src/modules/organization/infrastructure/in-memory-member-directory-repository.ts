@@ -1,4 +1,4 @@
-import type { MemberDirectoryRepository, MemberDirectoryResult } from "@/src/modules/organization/application/member-directory-contracts";
+import type { MemberDirectoryQuery, MemberDirectoryRepository, MemberDirectoryResult, PreviousMembership } from "@/src/modules/organization/application/member-directory-contracts";
 import type { DirectoryMember, OrgUnitOption, PositionOption } from "@/src/modules/organization/domain/member-directory";
 import { DEMO_MANAGER_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
 import { markEmployeeActive, markEmployeeInactive } from "@/src/platform/identity/employee-status";
@@ -50,9 +50,10 @@ export class InMemoryMemberDirectoryRepository implements MemberDirectoryReposit
     this.members = seed ? seedMembers() : [];
   }
 
-  async list(tenantId: string): Promise<MemberDirectoryResult> {
+  async list(tenantId: string, query: MemberDirectoryQuery = {}): Promise<MemberDirectoryResult> {
     if (tenantId !== DEMO_TENANT_ID) return { members: [], orgUnits: [], positions: [] };
-    return { members: this.members.filter((item) => item.status !== "departed").map((item) => ({ ...item })), orgUnits: ORG_UNITS.map((item) => ({ ...item })), positions: POSITIONS.map((item) => ({ ...item })) };
+    const members = query.includeDeparted ? this.members : this.members.filter((item) => item.status !== "departed");
+    return { members: members.map((item) => ({ ...item })), orgUnits: ORG_UNITS.map((item) => ({ ...item })), positions: POSITIONS.map((item) => ({ ...item })) };
   }
 
   async get(tenantId: string, userId: string): Promise<DirectoryMember | null> {
@@ -106,6 +107,35 @@ export class InMemoryMemberDirectoryRepository implements MemberDirectoryReposit
     this.members[index] = { ...this.members[index], status: "departed", archivedAt: new Date().toISOString(), version: this.members[index].version + 1 };
     // 停用即失去进入权：内存夹具模式下同步标记，鉴权入口据此拒绝旧会话。
     markEmployeeInactive(userId);
+    return "ok";
+  }
+
+  async lastMembership(tenantId: string, userId: string): Promise<PreviousMembership | null> {
+    if (tenantId !== DEMO_TENANT_ID) return null;
+    const member = this.members.find((item) => item.id === userId);
+    return member?.orgUnitId ? { orgUnitId: member.orgUnitId, positionId: member.positionId, isManager: member.isManager } : null;
+  }
+
+  async reactivate(tenantId: string, userId: string, expectedVersion: number, membership: PreviousMembership | null): Promise<"ok" | "version" | "not_departed"> {
+    if (tenantId !== DEMO_TENANT_ID) return "not_departed";
+    const index = this.members.findIndex((item) => item.id === userId);
+    if (index < 0) return "not_departed";
+    if (this.members[index].status !== "departed") return "not_departed";
+    if (this.members[index].version !== expectedVersion) return "version";
+    const current = this.members[index];
+    const restored: DirectoryMember = {
+      ...current,
+      status: "active",
+      version: current.version + 1,
+      orgUnitId: membership?.orgUnitId ?? current.orgUnitId,
+      positionId: membership?.positionId ?? current.positionId,
+      isManager: membership?.isManager ?? current.isManager,
+      orgUnitName: ORG_UNITS.find((item) => item.id === (membership?.orgUnitId ?? current.orgUnitId))?.name,
+      positionName: POSITIONS.find((item) => item.id === (membership?.positionId ?? current.positionId))?.name,
+    };
+    delete restored.archivedAt;
+    this.members[index] = restored;
+    markEmployeeActive(userId);
     return "ok";
   }
 }

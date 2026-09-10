@@ -77,6 +77,28 @@ export function deactivateMember(current: DirectoryMember): DirectoryMember {
   };
 }
 
+/**
+ * 重新启用：只有已停用/离职的成员可以恢复在职，并恢复任职（部门/岗位/负责人）。
+ * 只恢复"在职身份与任职"——停用时被收回的角色授权、委托、设备与外部身份不自动恢复，
+ * 需要管理员另行授予/重新登录，避免把一次误停用变成权限静默回滚。
+ */
+export function reactivateMember(
+  current: DirectoryMember,
+  input: { orgUnitId?: string; positionId?: string; isManager?: boolean } = {},
+): DirectoryMember {
+  if (current.status !== "departed") throw new Error("MEMBER_NOT_DEPARTED");
+  const restored: DirectoryMember = {
+    ...current,
+    status: "active",
+    orgUnitId: input.orgUnitId ?? current.orgUnitId,
+    positionId: input.positionId === undefined ? current.positionId : (input.positionId || undefined),
+    isManager: input.isManager ?? current.isManager,
+    version: current.version + 1,
+  };
+  delete restored.archivedAt;
+  return restored;
+}
+
 export function assertPositionBelongsToOrg(position: PositionOption | undefined, orgUnitId: string | undefined): void {
   if (!position) return;
   if (!orgUnitId || position.orgUnitId !== orgUnitId) throw new Error("MEMBER_POSITION_ORG_MISMATCH");

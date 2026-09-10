@@ -39,6 +39,15 @@ const deactivateMemberToolSchema = z.object({
   memberName: displayName.optional(),
 }).strict();
 
+const reactivateMemberToolSchema = z.object({
+  memberId: z.uuid(),
+  expectedVersion: z.number().int().positive(),
+  memberName: displayName.optional(),
+  orgUnitId: z.uuid().optional(),
+  positionId: z.uuid().optional(),
+  isManager: z.boolean().optional(),
+}).strict();
+
 const addMemberJsonSchema = {
   type: "object", additionalProperties: false,
   properties: {
@@ -131,6 +140,32 @@ export function registerMemberDirectoryTools(registry: ToolRegistry, service: Me
       const { memberId, memberName, expectedVersion } = deactivateMemberToolSchema.parse(input);
       void memberName;
       return service.deactivateMember(context, memberId, { expectedVersion });
+    },
+  });
+  registry.register({
+    id: "organization.reactivate_member", skillId: "organization-member-directory", version: 1,
+    description: "重新启用一名已停用/离职的员工（恢复在职）。用于用户明确要求“把某人恢复/重新启用/加回来”。只恢复在职身份与任职（部门/岗位/负责人可留空以沿用停用前设置），停用时被收回的角色授权、委托、设备与外部身份不会自动恢复，需要管理员另行授予或重新登录；本工具只生成待人工确认的提案，确认后才执行。",
+    requiredPermissions: ["organization_member:admin"], riskLevel: 2, confirmationPolicy: "always", sideEffect: "internal_idempotent", timeoutMs: 10_000, maxAttempts: 3,
+    allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
+    inputJsonSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        memberId: { type: "string", format: "uuid" }, expectedVersion: { type: "integer", minimum: 1 },
+        memberName: { type: "string", description: "可选；用于确认卡展示的姓名" },
+        orgUnitId: { type: "string", format: "uuid", description: "可选；留空沿用停用前部门" },
+        positionId: { type: "string", format: "uuid", description: "可选；必须属于所选部门" },
+        isManager: { type: "boolean", description: "可选；是否部门负责人" },
+      }, required: ["memberId", "expectedVersion"],
+    },
+    inputSchema: reactivateMemberToolSchema,
+    preview(input) {
+      const value = reactivateMemberToolSchema.parse(input);
+      return `将重新启用员工“${value.memberName ?? value.memberId}”（恢复在职与任职；不自动恢复角色授权与设备）。`;
+    },
+    execute(context, input) {
+      const { memberId, memberName, ...rest } = reactivateMemberToolSchema.parse(input);
+      void memberName;
+      return service.reactivateMember(context, memberId, rest);
     },
   });
 }

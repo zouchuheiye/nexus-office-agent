@@ -10,7 +10,7 @@ import { assertToolPolicy, ToolRegistry } from "@/src/modules/agent/domain/tool"
 import { createDefaultSkillRegistry } from "@/src/modules/agent/domain/skill";
 import { createDevelopmentRequestContext, DEMO_MANAGER_ID } from "@/src/platform/context/development-context";
 
-const TOOL_IDS = ["organization.list_members", "organization.add_member", "organization.update_member", "organization.deactivate_member"];
+const TOOL_IDS = ["organization.list_members", "organization.add_member", "organization.update_member", "organization.deactivate_member", "organization.reactivate_member"];
 
 function setup() {
   const service = new MemberDirectoryService(new InMemoryMemberDirectoryRepository());
@@ -50,6 +50,22 @@ describe("member directory agent tools", () => {
     expect(assertToolPolicy(manager(), tool(registry, "organization.add_member"))).toEqual({ requiresConfirmation: false });
     expect(assertToolPolicy(manager(), tool(registry, "organization.update_member"))).toEqual({ requiresConfirmation: false });
     expect(assertToolPolicy(manager(), tool(registry, "organization.deactivate_member"))).toEqual({ requiresConfirmation: true });
+    expect(assertToolPolicy(manager(), tool(registry, "organization.reactivate_member"))).toEqual({ requiresConfirmation: true });
+  });
+
+  it("reactivates a departed member through a confirmation-gated proposal", async () => {
+    const { registry } = setup();
+    const addTool = tool(registry, "organization.add_member");
+    const created = await addTool.execute(manager(), { displayName: "回流同事", orgUnitId: DEMO_PRODUCT_ORG_ID }) as { id: string; version: number };
+    const deactivateTool = tool(registry, "organization.deactivate_member");
+    await deactivateTool.execute(manager(), { memberId: created.id, expectedVersion: created.version, memberName: "回流同事" });
+
+    const reactivateTool = tool(registry, "organization.reactivate_member");
+    expect(reactivateTool.preview({ memberId: created.id, expectedVersion: 2, memberName: "回流同事" })).toContain("重新启用");
+    const restored = await reactivateTool.execute(manager(), { memberId: created.id, expectedVersion: 2, memberName: "回流同事" }) as { status: string; version: number; orgUnitName?: string };
+    expect(restored).toMatchObject({ status: "active", version: 3, orgUnitName: "产品中心" });
+    // 已在职者不能再次"重新启用"
+    await expect(reactivateTool.execute(manager(), { memberId: created.id, expectedVersion: 3 })).rejects.toThrow("MEMBER_NOT_DEPARTED");
   });
 
   it("registers a new hire from a name alone and says which fields are still open", async () => {

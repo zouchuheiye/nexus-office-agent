@@ -100,8 +100,8 @@ export function createDefaultSkillRegistry() {
     id: "organization-member-directory",
     title: "组织成员与入职登记",
     description: "登记新员工、补全员工资料（部门/岗位/负责人）与停用离职；不授予角色或权限。",
-    instructions: "用户说“新入职/新同事/把某人加进团队/登记员工”时调用 organization.add_member：入职当天职位、部门、邮箱常常还没定，只有姓名也必须登记，不要追问职位部门、不要要求先补全、不要编造 orgUnitId/positionId。用户后续补充“某人现在到某部门/岗位是…”时，先用 organization.list_members 取到 memberId 与 expectedVersion，再调用 organization.update_member。用户明确要求离职/停用/移除成员时调用 organization.deactivate_member：它是软删除（结束任职并标记离职，保留历史任务与审计），不存在物理删除，不能声称已彻底删除；该工具只生成待人工确认的提案。查询员工目录用 organization.list_members。本 Skill 不改变角色、权限或账号能力，也不能用企业微信等方式绕过。",
-    toolIds: ["organization.list_members", "organization.add_member", "organization.update_member", "organization.deactivate_member"],
+    instructions: "用户说“新入职/新同事/把某人加进团队/登记员工”时调用 organization.add_member：入职当天职位、部门、邮箱常常还没定，只有姓名也必须登记，不要追问职位部门、不要要求先补全、不要编造 orgUnitId/positionId。用户后续补充“某人现在到某部门/岗位是…”时，先用 organization.list_members 取到 memberId 与 expectedVersion，再调用 organization.update_member。用户明确要求离职/停用/移除成员时调用 organization.deactivate_member：它是软删除（结束任职并标记离职，保留历史任务与审计），不存在物理删除，不能声称已彻底删除；该工具只生成待人工确认的提案。用户要求“把某人恢复/重新启用/加回来”时调用 organization.reactivate_member（同样待人工确认）：只恢复在职与任职，停用时被收回的角色授权、设备与外部身份不会自动恢复，需另行授予或重新登录。查询员工目录用 organization.list_members（需要看已停用成员时说明其状态）。本 Skill 不改变角色、权限或账号能力，也不能用企业微信等方式绕过。",
+    toolIds: ["organization.list_members", "organization.add_member", "organization.update_member", "organization.deactivate_member", "organization.reactivate_member"],
   });
   registry.register({
     id: "identity-administration",

@@ -53,6 +53,13 @@ describe("停用员工的进入权", () => {
 
     // 旧 Cookie 仍然验签通过，但员工已停用：必须 401，且绝不能回退成管理员身份。
     await expect(resolveRequestContext(requestWithCookie(cookie))).rejects.toThrow("AUTHENTICATION_REQUIRED");
+
+    // 重新启用后恢复在职身份与任职，旧会话在有效期内重新可用
+    const restored = await getMemberDirectoryService().reactivateMember(manager, DELIVERY_ID, { expectedVersion: 2 });
+    expect(restored).toMatchObject({ status: "active", orgUnitName: "交付中心" });
+    await expect(resolveRequestContext(requestWithCookie(cookie))).resolves.toMatchObject({ actorId: DELIVERY_ID });
+    const switchedAgain = await switchIdentity(jsonRequest({ key: "delivery" }));
+    expect(switchedAgain.status).toBe(200);
   });
 
   it("停用的身份不再出现在切换列表里，也无法再切换过去", async () => {

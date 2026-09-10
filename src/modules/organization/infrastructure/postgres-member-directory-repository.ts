@@ -1,5 +1,5 @@
 import type { DatabaseExecutor, TransactionalDatabase } from "@/src/platform/database/executor";
-import type { MemberDirectoryRepository, MemberDirectoryResult } from "@/src/modules/organization/application/member-directory-contracts";
+import type { MemberDirectoryQuery, MemberDirectoryRepository, MemberDirectoryResult, PreviousMembership } from "@/src/modules/organization/application/member-directory-contracts";
 import type { DirectoryMember, OrgUnitOption, PositionOption } from "@/src/modules/organization/domain/member-directory";
 
 type Row = Record<string, unknown>;
@@ -26,7 +26,8 @@ const mapPosition = (row: Row): PositionOption => ({ id: asText(row.id), orgUnit
 export class PostgresMemberDirectoryRepository implements MemberDirectoryRepository {
   constructor(private readonly database: TransactionalDatabase) {}
 
-  async list(tenantId: string): Promise<MemberDirectoryResult> {
+  async list(tenantId: string, query: MemberDirectoryQuery = {}): Promise<MemberDirectoryResult> {
+    const includeDeparted = query.includeDeparted === true;
     return this.database.withTenant(tenantId, async (db) => {
       const [members, orgUnits, positions] = await Promise.all([
         db.query(
@@ -36,8 +37,8 @@ export class PostgresMemberDirectoryRepository implements MemberDirectoryReposit
            LEFT JOIN memberships m ON m.tenant_id=u.tenant_id AND m.user_id=u.id AND m.ends_at IS NULL
            LEFT JOIN org_units ou ON ou.tenant_id=m.tenant_id AND ou.id=m.org_unit_id
            LEFT JOIN positions p ON p.tenant_id=m.tenant_id AND p.id=m.position_id
-           WHERE u.tenant_id=$1 AND u.archived_at IS NULL
-           ORDER BY u.display_name,u.id`, [tenantId],
+           WHERE u.tenant_id=$1 AND ($2::boolean OR (u.status <> 'departed' AND u.archived_at IS NULL))
+           ORDER BY u.display_name,u.id`, [tenantId, includeDeparted],
         ),
         db.query("SELECT id::text,name,status FROM org_units WHERE tenant_id=$1 AND status='active' ORDER BY name,id", [tenantId]),
         db.query("SELECT id::text,org_unit_id::text,name,code,status FROM positions WHERE tenant_id=$1 AND status='active' ORDER BY name,id", [tenantId]),
@@ -113,6 +114,36 @@ export class PostgresMemberDirectoryRepository implements MemberDirectoryReposit
       await db.query("UPDATE delegations SET revoked_at=COALESCE(revoked_at,now()) WHERE tenant_id=$1 AND (delegator_id=$2 OR delegate_id=$2) AND revoked_at IS NULL", [tenantId, userId]);
       await db.query("UPDATE client_devices SET status='revoked',push_enabled=false,revoked_at=COALESCE(revoked_at,now()),version=version+1 WHERE tenant_id=$1 AND user_id=$2 AND status<>'revoked'", [tenantId, userId]);
       await db.query("UPDATE external_identities SET status='revoked',updated_at=now() WHERE tenant_id=$1 AND internal_subject_type='user' AND internal_subject_id=$2 AND status<>'revoked'", [tenantId, userId]);
+      return "ok";
+    });
+  }
+
+  async lastMembership(tenantId: string, userId: string): Promise<PreviousMembership | null> {
+    const rows = await this.database.withTenant(tenantId, (db) => db.query(
+      "SELECT org_unit_id::text,position_id::text,is_manager FROM memberships WHERE tenant_id=$1 AND user_id=$2 ORDER BY starts_at DESC,id DESC LIMIT 1",
+      [tenantId, userId],
+    ));
+    const row = rows[0];
+    return row ? { orgUnitId: asText(row.org_unit_id), positionId: optionalText(row.position_id), isManager: Boolean(row.is_manager) } : null;
+  }
+
+  async reactivate(tenantId: string, userId: string, expectedVersion: number, membership: PreviousMembership | null): Promise<"ok" | "version" | "not_departed"> {
+    return this.database.withTenant(tenantId, async (db) => {
+      const restored = await db.query(
+        "UPDATE users SET status='active',archived_at=NULL,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 AND version=$3 AND status='departed' RETURNING id",
+        [tenantId, userId, expectedVersion],
+      );
+      if (restored.length !== 1) {
+        const current = await db.query<{ status: string }>("SELECT status FROM users WHERE tenant_id=$1 AND id=$2", [tenantId, userId]);
+        return current[0]?.status === "departed" ? "version" : "not_departed";
+      }
+      // 只恢复在职与任职：停用时被收回的角色授权/委托/设备/外部身份不自动恢复，需管理员另行授予。
+      if (membership) {
+        await db.query(
+          "INSERT INTO memberships(id,tenant_id,user_id,org_unit_id,position_id,is_manager,starts_at,ends_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,now(),NULL,now(),now())",
+          [crypto.randomUUID(), tenantId, userId, membership.orgUnitId, membership.positionId ?? null, membership.isManager],
+        );
+      }
       return "ok";
     });
   }

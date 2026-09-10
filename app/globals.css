@@ -208,6 +208,9 @@
 .member-row-actions .member-remove.is-armed { padding: 4px 9px; }
 .member-directory-note { display: flex; align-items: start; gap: 6px; margin: 12px 0 0; padding: 9px 10px; color: var(--ink-3); background: var(--surface-2); border-radius: 7px; font-size: 8.5px; line-height: 1.5; }
 .member-directory-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--success); }
+.member-directory-departed-head { margin-top: 10px; padding-top: 12px; color: var(--cinnabar); border-top: 1px dashed var(--rule-subtle); }
+.member-directory-row.is-departed { background: color-mix(in oklch, var(--paper), var(--surface-2) 60%); }
+.member-directory-row.is-departed strong { color: var(--ink-2); }
 .member-editor-form { display: grid; gap: 12px; }
 .member-editor-form > label { display: grid; gap: 5px; color: var(--ink-2); font-size: 10px; font-weight: 650; }
 .member-editor-form input[type="text"], .member-editor-form input[type="email"], .member-editor-form select { width: 100%; box-sizing: border-box; padding: 8px 9px; color: var(--ink); background: var(--paper-raised); border: 1px solid var(--rule); border-radius: 7px; font: inherit; font-size: 11px; }

@@ -84,6 +84,28 @@ describe("Postgres member directory repository", () => {
     expect((await database.query("SELECT 1 FROM users WHERE id=$1", [member.id])).rows).toHaveLength(1);
   });
 
+  it("reactivates a departed member in place and reopens a current membership", async () => {
+    const manager = createDevelopmentRequestContext("pg-member-reactivate");
+    const member = await directory.createMember(manager, { displayName: "回流员工", email: "rejoin@example.test", orgUnitId: DELIVERY_ORG_ID, positionId: DELIVERY_POSITION_ID });
+    await directory.deactivateMember(manager, member.id, { expectedVersion: member.version });
+
+    // 已停用成员默认不在目录里，includeDeparted 时可见（供重新启用入口使用）
+    expect((await directory.list(manager)).members.find(({ id }) => id === member.id)).toBeUndefined();
+    expect((await directory.list(manager, { includeDeparted: true })).members.find(({ id }) => id === member.id)).toMatchObject({ status: "departed" });
+    await expect(directory.reactivateMember(manager, member.id, { expectedVersion: 1 })).rejects.toThrow("MEMBER_VERSION_CONFLICT");
+    // 留空部门/岗位：沿用停用前任职
+    const restored = await directory.reactivateMember(manager, member.id, { expectedVersion: 2 });
+    expect(restored).toMatchObject({ status: "active", orgUnitName: "交付中心", positionName: "交付负责人", version: 3 });
+    const user = await database.query<{ status: string; archived_at: string | null }>("SELECT status,archived_at FROM users WHERE id=$1", [member.id]);
+    expect(user.rows[0]).toMatchObject({ status: "active", archived_at: null });
+    const open = await database.query("SELECT 1 FROM memberships WHERE user_id=$1 AND ends_at IS NULL", [member.id]);
+    expect(open.rows).toHaveLength(1);
+    expect((await directory.list(manager)).members.find(({ id }) => id === member.id)).toMatchObject({ status: "active" });
+
+    // 已在职者不能重复重新启用
+    await expect(directory.reactivateMember(manager, member.id, { expectedVersion: 3 })).rejects.toThrow("MEMBER_NOT_DEPARTED");
+  });
+
   it("refuses deactivation while the member still holds an active package and keeps the task assignee intact", async () => {
     const manager = createDevelopmentRequestContext("pg-member-guard");
     const assignee = await directory.createMember(manager, { displayName: "进行中任务负责人", email: "busy@example.test", orgUnitId: DELIVERY_ORG_ID });

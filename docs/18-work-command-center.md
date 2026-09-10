@@ -95,6 +95,7 @@ flowchart LR
 - `organization.add_member`：登记新员工（入职登记）。**姓名是唯一必填项**，部门/岗位/邮箱可留空并后续补全；未知字段直接留空，不追问、不编造 ID；R1、`organization_member:admin`，写入 users/memberships 并留原子审计。
 - `organization.update_member`：补全或修改员工资料（姓名/邮箱/部门/岗位/是否负责人）；先经 `organization.list_members` 取 memberId 与 `expectedVersion`，按版本 CAS 更新；R1、`organization_member:admin`。
 - `organization.deactivate_member`：停用/离职。软删除（结束现行任职并标记离职，保留历史任务与审计，不存在物理删除）；仍有进行中任务的成员被服务端拒绝；R2、强制人工确认。
+- `organization.reactivate_member`：重新启用已停用/离职成员（恢复在职）。可指定或沿用停用前的部门/岗位/负责人；**只恢复在职与任职**，停用时收回的角色授权、委托、设备与外部身份不自动恢复，需管理员另行授予或重新登录/重新绑定；R2、强制人工确认。
 
 写通道的模型侧纠错：模型给出的 Tool 入参不符合 schema 时，编排器把校验问题回灌给模型重新调用（不计入已执行 Tool），而不是让整轮对话失败；仅当反复失败且从未执行时降级为可读说明。
 
@@ -131,6 +132,8 @@ flowchart LR
 单机开发与内网验证部署下，网页侧栏提供“开发验证身份”选择器（仅当服务端开放开发身份时显示，生产未显式开启时该接口失败关闭）。切换后签发签名会话 Cookie（只承载最小身份标识 tenantId/actorId/channel/sessionId，不内嵌权限表；权限每请求由服务端按 actorId 从白名单重建），同一浏览器的后续请求都按所选身份解析租户与权限；切换会重建主对话与任务栏上下文，使“我的/我发布/待承接/待交接”按人隔离可被真实验证。Cookie 保持最小尺寸是为了低于浏览器单 Cookie ~4KB 上限——开发管理员权限集较大，若随 Cookie 内嵌会被浏览器静默丢弃、界面停留旧身份。该能力只用于验证版，正式身份始终走企业 IdP（Authorization Code + PKCE），登录会话同样只带身份引用，授权由服务端解析器每请求重建。
 
 **停用/离职员工的进入权**：成员被停用后（成员管理软删除），其开发验证身份不再出现在切换列表中，切换接口返回 `403 DEMO_IDENTITY_INACTIVE`；此前签发的会话 Cookie 即使验签通过，也会因“已不是在职员工”被鉴权入口拒绝（`401 AUTHENTICATION_REQUIRED`），并且绝不回退成默认管理员身份（否则等于把“已停用”变成提权）。生产路径同样以 `users.status='active' AND archived_at IS NULL` 判定，非在职主体的授权解析直接返回空。停用是软删除：员工档案、历史任务与审计保留，但登录/授权/设备/外部身份入口一并失效。
+
+**重新启用**：`GET /organization/members?includeDeparted=true` 会把已停用成员一并列出（默认只返回在职成员），管理员在“成员管理”中对其「重新启用」（`POST /organization/members/:id/reactivate`）：恢复在职身份并重建现行任职，部门/岗位/负责人可指定，留空则沿用停用前任职；`users.archived_at` 清空、版本号递增（CAS）。只恢复“能重新上班”——停用期间被收回的角色授权、委托、客户端设备与外部身份不会自动回滚（停用时原到期时间已覆盖，无法精确还原），需管理员重新授予、重新登录或重新绑定；这也避免一次误停用把权限静默恢复。重新启用后，该身份重新出现在切换列表并可再次登录。
 
 ## 5. HTTP 契约
 
