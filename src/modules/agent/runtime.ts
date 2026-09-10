@@ -16,6 +16,8 @@ import { createPostgresDatabase } from "@/src/platform/database/postgres";
 import { getAgentMemoryService } from "@/src/modules/agent-memory/runtime";
 import { registerAgentMemoryTools } from "@/src/modules/agent-memory/application/agent-tools";
 import { registerOfficeReadTools } from "@/src/modules/agent/application/office-read-tools";
+import { registerMemberDirectoryTools } from "@/src/modules/organization/application/member-directory-agent-tools";
+import { getMemberDirectoryService } from "@/src/modules/organization/runtime";
 import { getEnterpriseGovernanceService } from "@/src/modules/enterprise-governance/runtime";
 import { getEnterpriseIntelligenceService } from "@/src/modules/enterprise-intelligence/runtime";
 import { getGovernanceRuntime } from "@/src/modules/governance-workspace/runtime";
@@ -53,6 +55,7 @@ function buildAgentRuntime(): AgentRuntimeBundle {
     knowledge: governanceWorkspace.knowledge, meetings: governanceWorkspace.meetings, workflow: governanceWorkspace.workflow,
   });
   registerTaskCommandTools(tools, taskCommand);
+  registerMemberDirectoryTools(tools, getMemberDirectoryService());
   registerWecomAccessControlTools(tools, getWecomAccessControlService());
   registerWecomApplicationMessageTools(tools, getWecomApplicationMessageService());
   const skills = createDefaultSkillRegistry();

@@ -23,7 +23,9 @@ describe("member-directory domain", () => {
     expect(member.displayName).toBe("新同事");
     expect(member.email).toBe("NEW@EXAMPLE.com");
     expect(member).toMatchObject({ status: "active", version: 1, isManager: false });
-    expect(() => createMemberProfile({ id: "x", displayName: "A" })).toThrow("MEMBER_DISPLAY_NAME_REQUIRED");
+    expect(() => createMemberProfile({ id: "x", displayName: "   " })).toThrow("MEMBER_DISPLAY_NAME_REQUIRED");
+    // 入职登记只要姓名：单字姓名也合法，部门/岗位/邮箱全部可留空
+    expect(createMemberProfile({ id: "x", displayName: "李" })).toMatchObject({ displayName: "李", orgUnitId: undefined, positionId: undefined, email: undefined });
     expect(() => createMemberProfile({ id: "x", displayName: "小明", email: "not-an-email" })).toThrow("MEMBER_EMAIL_INVALID");
   });
 

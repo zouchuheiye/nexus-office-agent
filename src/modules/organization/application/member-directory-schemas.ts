@@ -1,8 +1,12 @@
 import { z } from "zod";
 
+/** 姓名是唯一必填项：入职当天部门/岗位/邮箱常常未定，留空合法（后续用 update 补全）。 */
+export const displayName = z.string().trim().min(1).max(80);
+export const memberEmail = z.string().trim().email().max(200);
+
 export const createMemberSchema = z.object({
-  displayName: z.string().trim().min(2).max(80),
-  email: z.string().trim().email().max(200).optional(),
+  displayName,
+  email: memberEmail.optional(),
   orgUnitId: z.uuid().optional(),
   positionId: z.uuid().optional(),
   isManager: z.boolean().optional(),
@@ -10,8 +14,8 @@ export const createMemberSchema = z.object({
 
 export const updateMemberSchema = z.object({
   expectedVersion: z.number().int().positive(),
-  displayName: z.string().trim().min(2).max(80).optional(),
-  email: z.string().trim().email().max(200).optional(),
+  displayName: displayName.optional(),
+  email: memberEmail.optional(),
   orgUnitId: z.uuid().optional(),
   positionId: z.uuid().optional(),
   isManager: z.boolean().optional(),

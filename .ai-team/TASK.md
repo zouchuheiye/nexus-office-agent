@@ -26,6 +26,8 @@
 - [x] P2：AI 起草的提案卡升级为可编辑预览卡——服务端 amend/supersede（`GET/POST /api/v1/agent/proposals/:id[/amend]`）已实现并通过单元/集成测试；网页对话提案卡新增「修正草稿」：读取结构化输入、按字段编辑（标量/日期/字符串数组用输入框，嵌套结构用 JSON 子编辑器）、保存后旧提案作废、生成需再次确认的新提案。
 - [x] P3（第一批，按第六节推荐值）：任务包子任务拆分/勾选/重开/删除 + 进度 done/total + 验收门禁 + AI 只起草勾选建议（R3 确认）。
 - [x] 成员管理（员工目录，用户确认补入口）：并入“组织与人才”页，管理员（开发管理员，`organization_member:admin`）可新增成员、编辑姓名/邮箱/部门/岗位/是否负责人、软停用员工（设 users.status+archived_at、结束现行任职，不物理删、保留历史与审计）；`organization_member:read` 允许查看（各演示身份）。
+- [x] 员工入职登记 Agent 通道（用户要求“把名字打上就好”）：会话内新增 `organization.list/add/update/deactivate_member` 与 `organization-member-directory` Skill；登记只要求姓名、部门/岗位/邮箱可留空后补，只建名册不授予角色权限，停用/离职仍需人工确认；同时修复工具可见性（意图过滤白名单未含新技能）与工具入参不合规导致整轮 422 的通用缺陷；真实会话已登记新员工“张三”（部门/岗位待补充）。
+- [x] project-to-act 台账同步：本批 P0/P1/P2/P3、成员管理与入职登记已补记 `PROJECT_PROGRESS.md`（E-139～E-144）、`PROJECT_FEATURES.md`（F-091～F-096）、`PROJECT_VERSIONS.md` 与 `PROJECT_ACCEPTANCE.md`；并把“每个交付批次必须写 project-to-act”写入 AGENTS.md 长期要求。
 - [ ] P3（后续）/P4/P5：子任务证据附件上传、通知链路、体验细节按产品后续排期推进（本任务不替代产品决策）。
 
 ## Invariants
@@ -34,7 +36,8 @@
 - 验收通过/退回永不自动执行；高风险业务副作用只能经 Tool Registry、持久化提案和人工确认执行。
 - 默认内存仓储只在未配置 `DATABASE_URL` 时启用；正式 PostgreSQL 路径不因本批改动降级。
 - 不删除或弱化既有测试来消除失败；改动同步更新权威文档（docs/08、docs/18）与追踪证据。
-- 代码、测试、文档和 `.ai-team/TASK.md` 在同一提交/PR 中同步更新；不提交密钥、私人数据或运行产物。
+- 代码、测试、文档、`.ai-team/TASK.md` 与 `.project-to-act/` 台账在同一提交/PR 中同步更新；不提交密钥、私人数据或运行产物。
+- 员工名册写入只维护主数据，不授予角色、权限或账号能力（`identity-administration` 不向 Agent 开放）；入职登记只要姓名即可，停用/离职必须人工确认。
 
 ## Decisions
 
@@ -66,26 +69,31 @@
 - P3 HTTP 通道修复与回归：子任务 POST/PATCH 路由改为“先注入路径 packageId/subtaskId 再校验 body”（body 不再携带 id），并补 API 级路由测试（新增/勾选/列表/门禁/锁定全链路）；`applicationErrorResponse` 补 `_LOCKED` 类错误 → 409，保证 `WORK_PACKAGE_SUBTASKS_LOCKED` 不再落为 500。
 - P1 身份切换缺陷修复：开发管理员（manager）权限集约 140 项，签发到签名会话 Cookie 后接近 5KB、超过浏览器单 Cookie ~4KB 上限，浏览器静默丢弃新 Cookie 导致切回管理员后仍停留旧身份（如周然）。已改为会话 Cookie 只承载最小身份标识（tenantId/actorId/channel/sessionId），roles/permissions/dataScopes 不再内嵌（服务端本就按 actorId 从白名单/授权解析器每请求重建权限，Cookie 快照从不被信任）；开发切换与 OIDC 回调两条签发通道同时瘦身，manager Cookie 由 ~4.96KB 降至 ~343B，并补“超 4KB 亦可被浏览器覆盖”的回归测试。
 - 成员管理（员工目录）：`organization` 模块新增 member-directory 域（create/edit/deactivate 不变量）+ application service（`organization_member:read` 读、`organization_member:admin` 写；邮箱唯一/岗位归属部门/禁止停用自己/有进行中任务禁止停用）+ contracts/schemas；Postgres 与 InMemory 仓储（users/memberships/org_units/positions 读写，RLS+原子审计沿用）；runtime 与 HTTP 路由 `GET/POST /organization/members`、`PATCH/DELETE /organization/members/:id`；开发身份权限补 `organization_member:read/admin`（read 覆盖各演示身份）；`EnterpriseIntelligenceView` people 页并入“成员管理”卡片（目录列表 + 新增/编辑对话框 + 停用二次确认 + 仅管理员可见操作）；单测（域不变量、门禁、越权拒绝、自停用拦截）+ PGlite 集成（CRUD/RLS/审计/进行中任务保护/邮箱大小写唯一）。
+- 员工入职登记 Agent 通道：新增 `src/modules/organization/application/member-directory-agent-tools.ts`（`organization.list_members` R0、`add_member`/`update_member` R1 直写、`deactivate_member` R2 强制确认）与 `organization-member-directory` Skill，接入 `agent/runtime`、技能目录与系统提示词；姓名放宽为唯一必填（域/schema/UI 同步，单字姓名合法），未知部门岗位留空；修复 `filterToolsByIntent` 核心技能白名单漏配新技能（工具在注入模型前被裁掉），以及工具入参不合规把整轮对话打成 422 的通用缺陷（改为回灌模型纠正重试，仅反复失败且从未执行时降级说明）；新增 `tests/unit/member-directory-agent-tools.test.ts`（注册/技能归属/权限可见性/仅姓名登记/岗位归属/版本 CAS/软停用与自停用拦截）。
 
 ## Pending
 
 - P3（后续）/P4/P5 不在本批 MVP-FIX 交付范围：子任务证据附件上传（决策点 6 补件）、通知链路（分派/交接/验收主动通知与提醒脚本常驻调度）、体验细节（文案人话化、空态引导、流式/阶段提示、一键重试）按产品后续排期与文档第六节建议推进，本任务不替代产品决策。
 - 成员管理正式化前置：`organization_member:admin/read` 目前只在开发白名单可用；正式环境需在 roles/permissions 预置对应权限与角色绑定（本次保持失败关闭），员工主数据仍以企业 IdP/授权目录为准。
+- 入职登记后续可选项：目前只登记姓名（部门/岗位/邮箱留空）；如需“入职即带部门/岗位”“入职跟进任务自动创建”“新员工欢迎通知”，需产品确认后再立项（当前不自动造字段、不自动发消息）。
 - 浏览器端视觉验收（表格视图、身份切换器、发布任务/验收/修正草稿对话框、子任务面板、成员管理卡片、时间线移动端布局）仍需可用浏览器环境；本机未安装浏览器驱动，已在 Verification 中如实标注。
 
 ## Next step
 
-P01 复核 MVP-FIX 的 P0/P1 快照、P2 双通道交付（提交验收/验收通过退回/发起交接/发布任务 + 表单发布入口 + 可编辑提案预览卡）、P3 子任务拆分/勾选（全部按推荐决策执行）与成员管理页（组织与人才 · 管理员新增/编辑/软停用）并决定合并；P3 证据附件与 P4/P5 由产品按排期另行立项。
+P01 复核 MVP-FIX 的 P0/P1 快照、P2 双通道交付（提交验收/验收通过退回/发起交接/发布任务 + 表单发布入口 + 可编辑提案预览卡）、P3 子任务拆分/勾选（全部按推荐决策执行）、成员管理页（组织与人才 · 管理员新增/编辑/软停用）与员工入职登记 Agent 通道（仅姓名即可登记）并决定合并；P3 证据附件与 P4/P5 由产品按排期另行立项。
 
 ## Verification
 
 - [x] `npm run typecheck`：exit 0。
 - [x] `npm run lint`：exit 0（零警告）。
-- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（541 passed / 26 skipped）。
+- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（130 文件 548 passed / 26 skipped）。
 - [x] P0 导出过滤单测、P1 身份切换集成测试、P2 验收流转单测（review_decision 边界 + reviewNote 事件审计）、P2 amend/supersede 单元与集成测试：通过。
 - [x] P3 单测（双方可拆且旁观者拒绝、完成/重开与证据门禁、in_review 锁定、workspace 进度暴露、Agent 工具注册与 R3 确认策略、schema 证据格式）与 Postgres 集成测试（落库、CAS 冲突、进度聚合、锁定期）：通过。
 - [x] 成员管理测试：域单测（创建/编辑/停用不变量与岗位归属校验）、服务单测（读门禁与 canManage、管理员增改停、越权拒绝、邮箱唯一、版本 CAS、禁止停用自己）、PGlite 集成（CRUD + RLS + users/memberships 审计 + 有进行中任务禁止停用 + 邮箱大小写不敏感唯一）：通过。
-- [x] `node .ai-team/check.mjs`：Result: valid（functional 14/15，唯一未勾为 P3 后续证据附件与 P4/P5 排期项）。
+- [x] 员工入职登记测试：`tests/unit/member-directory-agent-tools.test.ts` 6 项（四个工具注册与技能归属、权限可见性、确认策略、仅姓名登记、岗位归属拒绝、资料补全与版本 CAS、软停用与自停用拦截）通过。
+- [x] 真实 dev server 端到端：对“今天新入职了一名员工叫张三”Agent 调用 `organization.add_member` 仅凭姓名登记张三（active、v1、部门/岗位/邮箱留空），成员目录与任务可指派人员列表均可查到；skills/tools 路由记录为 `organization-member-directory` / `organization.add_member`。
+- [x] project-to-act 台账：`PROJECT_PROGRESS.md`（E-139～E-144）、`PROJECT_FEATURES.md`（F-091～F-096）、`PROJECT_VERSIONS.md`、`PROJECT_ACCEPTANCE.md` 已同步本批交付；AGENTS.md 已加入“每批次必须写 project-to-act”的长期要求。
+- [x] `node .ai-team/check.mjs`：Result: valid（functional 16/17，唯一未勾为 P3 后续证据附件与 P4/P5 排期项）。
 - [x] Next 生产构建 `npm run build`：exit 0。
 - [ ] 浏览器端视觉验收（表格视图/身份切换器/发布任务/验收/修正草稿对话框/子任务面板/成员管理卡片/时间线移动端）：待有浏览器驱动的环境复核。
 

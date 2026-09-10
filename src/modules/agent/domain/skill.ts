@@ -97,6 +97,13 @@ export function createDefaultSkillRegistry() {
     toolIds: ["workflow.read_snapshot", "workflow.pre_review"],
   });
   registry.register({
+    id: "organization-member-directory",
+    title: "组织成员与入职登记",
+    description: "登记新员工、补全员工资料（部门/岗位/负责人）与停用离职；不授予角色或权限。",
+    instructions: "用户说“新入职/新同事/把某人加进团队/登记员工”时调用 organization.add_member：入职当天职位、部门、邮箱常常还没定，只有姓名也必须登记，不要追问职位部门、不要要求先补全、不要编造 orgUnitId/positionId。用户后续补充“某人现在到某部门/岗位是…”时，先用 organization.list_members 取到 memberId 与 expectedVersion，再调用 organization.update_member。用户明确要求离职/停用/移除成员时调用 organization.deactivate_member：它是软删除（结束任职并标记离职，保留历史任务与审计），不存在物理删除，不能声称已彻底删除；该工具只生成待人工确认的提案。查询员工目录用 organization.list_members。本 Skill 不改变角色、权限或账号能力，也不能用企业微信等方式绕过。",
+    toolIds: ["organization.list_members", "organization.add_member", "organization.update_member", "organization.deactivate_member"],
+  });
+  registry.register({
     id: "identity-administration",
     title: "身份与角色治理",
     description: "企业角色变更属于高风险治理动作，当前不向 Agent 开放执行。",

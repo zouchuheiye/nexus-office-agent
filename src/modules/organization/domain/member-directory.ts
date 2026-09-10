@@ -33,7 +33,8 @@ export function createMemberProfile(input: {
   positionId?: string;
   isManager?: boolean;
 }): DirectoryMember {
-  if (!input.displayName || input.displayName.trim().length < 2) throw new Error("MEMBER_DISPLAY_NAME_REQUIRED");
+  // 入职登记只强求姓名：部门、岗位、邮箱在入职当天常常还没定，留空合法，后续用 editMemberProfile 补全。
+  if (!input.displayName || input.displayName.trim().length < 1) throw new Error("MEMBER_DISPLAY_NAME_REQUIRED");
   if (input.displayName.trim().length > 80) throw new Error("MEMBER_DISPLAY_NAME_TOO_LONG");
   if (input.email !== undefined && input.email.trim() !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim())) throw new Error("MEMBER_EMAIL_INVALID");
   return {
@@ -52,7 +53,7 @@ export function editMemberProfile(
   current: DirectoryMember,
   input: { displayName?: string; email?: string; orgUnitId?: string; positionId?: string; isManager?: boolean },
 ): DirectoryMember {
-  if (input.displayName !== undefined && (input.displayName.trim().length < 2 || input.displayName.trim().length > 80)) throw new Error("MEMBER_DISPLAY_NAME_REQUIRED");
+  if (input.displayName !== undefined && (input.displayName.trim().length < 1 || input.displayName.trim().length > 80)) throw new Error("MEMBER_DISPLAY_NAME_REQUIRED");
   if (input.email !== undefined && input.email.trim() !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim())) throw new Error("MEMBER_EMAIL_INVALID");
   return {
     ...current,

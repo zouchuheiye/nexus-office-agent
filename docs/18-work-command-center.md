@@ -89,6 +89,15 @@ flowchart LR
 - `memory.remember`：R2 保存用户明确确认的稳定记忆；共享范围再验权限。
 - `office.read_governance_workspace`、`office.read_enterprise_intelligence`、`office.prepare_operating_insight`、`knowledge.search`、`meeting.prepare`、`workflow.read_snapshot`、`workflow.pre_review`：R0 跨企业办公模块的只读依据 Tool。
 
+员工名册 Tool（`organization-member-directory` Skill；只维护员工主数据，**不授予角色、权限或账号能力**，`identity-administration` 仍不向 Agent 开放）：
+
+- `organization.list_members`：只读查询当前租户员工目录（姓名/邮箱/部门/岗位/是否负责人/在职状态/版本）；R0，回答人员与部门问题、取 memberId 前必须先核验，不得编造。
+- `organization.add_member`：登记新员工（入职登记）。**姓名是唯一必填项**，部门/岗位/邮箱可留空并后续补全；未知字段直接留空，不追问、不编造 ID；R1、`organization_member:admin`，写入 users/memberships 并留原子审计。
+- `organization.update_member`：补全或修改员工资料（姓名/邮箱/部门/岗位/是否负责人）；先经 `organization.list_members` 取 memberId 与 `expectedVersion`，按版本 CAS 更新；R1、`organization_member:admin`。
+- `organization.deactivate_member`：停用/离职。软删除（结束现行任职并标记离职，保留历史任务与审计，不存在物理删除）；仍有进行中任务的成员被服务端拒绝；R2、强制人工确认。
+
+写通道的模型侧纠错：模型给出的 Tool 入参不符合 schema 时，编排器把校验问题回灌给模型重新调用（不计入已执行 Tool），而不是让整轮对话失败；仅当反复失败且从未执行时降级为可读说明。
+
 ## 4. 数据与实时性
 
 `0017_work_command_center.sql` 新增五张任务租户表，`0018_work_message_pools.sql` 新增三张消息租户表并为任务包增加部门目标字段，`0019_work_task_handoffs.sql` 新增交接链；`0022_agent_memory.sql` 新增分级记忆：

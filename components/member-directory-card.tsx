@@ -118,12 +118,12 @@ export function MemberDirectoryCard({ onNotice }: { onNotice: (message: string) 
     {open ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="member-editor-title">
       <header><div><h2 id="member-editor-title">{editing ? "编辑成员" : "新增成员"}</h2><p>{editing ? editing.displayName : "姓名、邮箱、组织与岗位"}</p></div><button type="button" className="icon-button" aria-label="关闭" onClick={closeEditor}>×</button></header>
       <form onSubmit={submit} className="member-editor-form">
-        <label>姓名 *<input value={draft.displayName} onChange={(event) => setDraft((current) => ({ ...current, displayName: event.target.value }))} minLength={2} maxLength={80} required autoFocus /></label>
+        <label>姓名 *<input value={draft.displayName} onChange={(event) => setDraft((current) => ({ ...current, displayName: event.target.value }))} minLength={1} maxLength={80} required autoFocus placeholder="入职登记只需姓名，部门与岗位可留空" /></label>
         <label>邮箱（可选）<input type="email" value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} placeholder="name@company.test" /></label>
         <label>所在部门<select value={draft.orgUnitId} onChange={(event) => { setDraft((current) => ({ ...current, orgUnitId: event.target.value, positionId: "" })); }}><option value="">未分组织</option>{directory?.orgUnits.map((unit) => <option value={unit.id} key={unit.id}>{unit.name}</option>)}</select></label>
         <label>岗位（限本部门）<select value={draft.positionId} onChange={(event) => setDraft((current) => ({ ...current, positionId: event.target.value }))} disabled={!draft.orgUnitId}><option value="">未设岗位</option>{positionsInOrg(draft.orgUnitId).map((position) => <option value={position.id} key={position.id}>{position.name}</option>)}</select></label>
         <label className="member-checkbox"><input type="checkbox" checked={draft.isManager} onChange={(event) => setDraft((current) => ({ ...current, isManager: event.target.checked }))} />该成员是所在部门负责人</label>
-        <footer><button type="button" onClick={closeEditor}>取消</button><button type="submit" className="primary" disabled={busy || draft.displayName.trim().length < 2}>{busy ? <LoaderCircle className="spin" size={13} /> : <Plus size={13} />}{editing ? "保存修改" : "确认新增"}</button></footer>
+        <footer><button type="button" onClick={closeEditor}>取消</button><button type="submit" className="primary" disabled={busy || draft.displayName.trim().length < 1}>{busy ? <LoaderCircle className="spin" size={13} /> : <Plus size={13} />}{editing ? "保存修改" : "确认新增"}</button></footer>
       </form>
     </section></div> : null}
   </section>;

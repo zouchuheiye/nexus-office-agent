@@ -94,6 +94,12 @@
 | F-088 | 员工画像 | P2 | 已移除（按用户要求，2026-09-01） | F-077、F-084 | 曾实现从任务历史 `requiredSkills` 派生技能画像与任务匹配建议；用户判断与“项目管理为核心”的定位重叠，已整体移除导航、页面、组件与样式 | E-105,E-111 |
 | F-089 | 公告中心 | P2 | 已移除（按用户要求，2026-09-01） | F-087、消息池 | 曾实现消息池消息 `kind`（announcement/notice）与公告/通知分栏页；用户改为“我的任务”后已移除页面、导航与样式；消息池 `kind` 字段与右侧消息栏保留 | E-107,E-112 |
 | F-090 | 我的任务 | P2 | 已移除（按用户要求收敛导航，2026-09-02） | F-077、F-084 | 曾实现个人任务页：只显示分配给我的任务，按 进行中/待验收/已阻塞/已完成 分组，支持 开始/解除阻塞/提交验收/完成/交接 与“让 Agent 整理”；2026-09-02 用户决定任务管理先用起来，移除导航入口与页面组件，收敛到工作对话任务侧栏与任务进度 | E-112,E-113 |
+| F-091 | 任务进度表格视图与同口径导出 | P0 | 已完成（本地工程范围） | F-082、F-086 | 看板之外提供表格视图（标题/使命-项目/负责人/部门/状态/开始/工期/截止/到期态/容量点/待补充），按范围/负责人/使命/状态/仅逾期过滤与稳定排序；导出与页面同口径；看板/表格/聚合统一取自 `/task-command/board` 单一授权数据源 | E-139 |
+| F-092 | 开发验证身份选人登录 | P1 | 已完成（本地工程范围） | F-040、F-014 | 服务端定义 manager/delivery/product/operations 四身份并以签名会话 Cookie 切换，权限按 actorId 从白名单重建，生产未显式开启时失败关闭；bootstrap/board/workspace 与任务侧栏按身份隔离；Cookie 只承载最小身份标识（修复超 4KB 被浏览器丢弃导致切换不生效） | E-139,E-142 |
+| F-093 | 验收/交接双通道与 R3 可编辑预览 | P0 | 已完成（本地工程范围） | F-077～F-081、F-020 | 提交验收与验收通过/退回直连按钮（证据格式门禁、通过/退回仅发布人或管理员、决定与原因入事件链）；表单发布入口与口述通道并存；AI 起草交接单可在预览卡逐字段修正，服务端 supersede 旧提案后生成待再次确认的新提案 | E-140 |
+| F-094 | 任务包子任务清单 | P0 | 已完成（本地工程范围） | F-077、F-016 | 任务卡内拆分/勾选/重开/删除子任务并显示 done/total；有子任务须全部完成才能提交验收，进入验收/完成后清单锁定；每条变更进入 `package_progress_updated` 事件链；Agent 只能经 R3 提案起草勾选建议 | E-141 |
+| F-095 | 成员管理（员工目录） | P0 | 已完成（本地工程范围） | F-013、F-014 | “组织与人才”页提供成员目录：管理员可新增/编辑（姓名/邮箱/部门/岗位/负责人）与停用；软删除保留历史与审计，有进行中任务禁止停用，不能停用自己；读 `organization_member:read`、写 `organization_member:admin` | E-143 |
+| F-096 | 员工入职登记 Agent 通道 | P0 | 已完成（本地工程范围） | F-095、F-020 | 会话内可用 `organization.list/add/update/deactivate_member`：入职只要求姓名（部门/岗位/邮箱可留空并后续补全），登记不授予任何角色与权限；停用/离职为 R2 待人工确认；工具入参不合规回灌模型纠正而非整轮失败 | E-144 |
 ## Pi 模块与函数级实现契约
 
 | 模块 ID | 对应功能 | 实现边界 | 主要接口/类 | 必须实现的函数与语义 | 持久化/事件 | 安全与失败策略 | Gate |
@@ -464,3 +470,15 @@
 - 2026-08-28：新增 F-088“员工画像”，形成 E-105。新增左侧导航“员工画像”与独立模块页，从 task-command board 的 `requiredSkills` 派生员工技能画像（按历史任务计数），汇总在手/进行中/临期/容量点/参与项目，列出当前任务，并基于技能重合与开放任务生成“任务匹配建议”；匹配项可一键触发 Agent 生成分派提案（onAsk），不直接落库。验证：`npm run typecheck` exit 0、`npm run lint` exit 0（0 errors/0 warnings）、真实 board 返回 `requiredSkills`、页面 `/ ?view=employee-profile` 渲染成功。遗留：演示数据暂无未分派开放任务，建议区为空态；真实企业 Gate 不变。
 
 - 2026-08-31：新增 F-089“公告中心”，形成 E-107。消息池消息新增 `kind` 字段（announcement/notice，0047 迁移 + 领域/schema/仓储/Agent 工具打通，日报与提醒默认 notice）；左侧导航新增“公告中心”页，按公告/通知分栏展示公司/部门消息池，支持在原公告下反馈、发布公告走 Agent 提案；右侧工作对话消息栏保持原样未改动。验证：typecheck 0 错误、lint 0 错误/0 警告、`task-command`/`task-reminder-export`/`agent-native-tool-routing` 25 项单测通过、workspace 接口返回 kind（1 公告 + 7 通知）、`/?view=announcement-center` 渲染成功。遗留：公告已读/置顶未做；真实企业 Gate 不变。
+
+- 2026-09-09：新增 F-091“任务进度表格视图与同口径导出”、F-092“开发验证身份选人登录”，形成 E-139。任务进度页在看板之外补表格视图（含部门/开始/工期/到期态/待补充列）、范围/负责人/使命/状态/仅逾期过滤与稳定排序；导出复用 `GET /reports/export` 且与页面同口径；看板/表格/聚合统一读 `/task-command/board`。开发验证身份扩为 manager/delivery/product/operations 四身份，新增 `GET/POST /auth/development-identities[/switch]` 与网页顶部切换器，切换后 bootstrap/board/workspace 与任务侧栏按身份重建，生产未显式开启时失败关闭。验证：typecheck 0、lint 0（0 errors/0 warnings）、全量 513 项通过、生产构建 exit 0；真实切换后 bootstrap 解析为周然。遗留：浏览器视觉验收待有驱动的环境；真实企业 Gate 不变。
+
+- 2026-09-09：新增 F-093“验收/交接双通道与 R3 可编辑预览”，形成 E-140。提交验收改为直连按钮 + 证据对话框（证据仅接受 http(s) 或“类型:引用”）；从 `in_review` 到 `completed`/退回 `in_progress`（带 ≥4 字原因）只允许发布人或管理员，决定与原因写入 `package_status_changed`；发布任务新增表单入口（`POST /missions`，source=human）；AI 起草的交接单可在提案卡「修正草稿」逐字段修改，服务端 supersede 旧提案后生成待再次确认的新提案；移除不属于产品方案的全局“任务时间线”页（保留单任务卡时间线与 SSE）；补充按项目健康/里程碑进度条。验证：typecheck 0、lint 0、全量测试逐批 513→520 通过、生产构建 exit 0；docs/08、docs/18 同步。遗留：浏览器视觉验收待补；真实企业 Gate 不变。
+
+- 2026-09-09：新增 F-094“任务包子任务清单”，形成 E-141。迁移 `0048_work_package_subtasks.sql`（+down）新增 `work_package_tasks`（FORCE RLS、原子审计、版本 CAS、pending/done 二态、可选完成说明与证据引用）并扩展事件类型 `package_progress_updated`；任务卡支持拆分/勾选/重开/删除，`progress:{done,total}` 进入 workspace；有子任务须全部完成才能提交验收，进入验收/完成后清单锁定；Agent 新增 `work.list/add/update_package_subtask`（R3 起草）。同时修复子任务路由 body 校验顺序（真实客户端恒 422）与 `*_LOCKED` → 409 映射。验证：单测 + API 级路由测试 + PGlite 集成（落库/CAS/进度聚合/锁定期）通过，本地库应用 0048 后 workspace 200，真实链路 新增→门禁→勾选→删除→验收→锁定 通过。遗留：子任务附件上传与 P4/P5 排期项未做。
+
+- 2026-09-09：修复身份切换 Cookie 超限，形成 E-142。会话 Cookie 原先内嵌整份 roles/permissions/dataScopes，“开发管理员”权限集约 140 项使 Cookie 达 ~4.96KB，超过浏览器单 Cookie ~4KB 上限被静默丢弃，切回管理员后仍显示旧身份（周然）。现 Cookie 只保留 tenantId/actorId/channel/sessionId（~343B），权限每请求由服务端按 actorId 重建；开发切换与 OIDC 回调两条签发通道同步瘦身，旧 Cookie 因字段可选仍可验签。验证：Cookie 长度实测、双身份 Cookie 回放解析、回归测试“最大权限身份 Cookie < 2KB 且权限来自服务端”；全量 528 项通过。
+
+- 2026-09-09：新增 F-095“成员管理（员工目录）”，形成 E-143。`organization` 模块新增 member-directory 纵切（域不变量/应用服务/Postgres+InMemory 仓储/runtime）与 HTTP `GET/POST /organization/members`、`PATCH/DELETE /organization/members/:id`；读 `organization_member:read`、写 `organization_member:admin`；邮箱租户唯一、岗位归属部门、版本 CAS、禁止停用自己、有进行中任务禁止停用；停用为软删除并保留历史与审计。“组织与人才”页并入“成员管理”卡片（目录 + 新增/编辑对话框 + 停用二次确认）。验证：单测 13 项、PGlite 集成（CRUD/RLS/审计/在岗保护/邮箱唯一）通过，全量 541 项通过，真实 dev server 新增→任务人员可见→编辑→停用 链路通过。
+
+- 2026-09-10：新增 F-096“员工入职登记 Agent 通道”，形成 E-144。会话内新增 `organization.list_members`/`add_member`/`update_member`/`deactivate_member` 与 `organization-member-directory` Skill：入职登记只要求姓名（部门/岗位/邮箱可留空、后续补全），只建立名册记录、不授予角色或权限，停用/离职仍需人工确认。修复两处通用缺陷：`filterToolsByIntent` 核心技能白名单未含新技能导致工具在注入模型前被裁掉；工具入参不合规会把整轮对话打成 422（改为回灌模型纠正重试）。真实会话验证：用户说“今天新入职了一名员工叫张三”，Agent 调用 `organization.add_member` 仅凭姓名登记张三（active、v1、部门/岗位留空），成员目录与任务可指派人员列表均可查到。验证：typecheck 0、lint 0、新增工具单测 6 项、全量 548 项通过、dev server 真实 E2E 通过。遗留：正式环境需在 roles/permissions 预置 `organization_member:admin/read`（当前仅开发白名单可用，默认失败关闭）。
