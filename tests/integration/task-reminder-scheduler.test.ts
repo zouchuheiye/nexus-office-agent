@@ -93,9 +93,12 @@ describe("Postgres 定时提醒调度", () => {
     const member = { ...createDevelopmentRequestContext("postgres-reminder-member"), actorId: MEMBER_ID };
     const list = await service.notifications(member, { unreadOnly: true });
     expect(list.unreadCount).toBe(2);
-    expect(list.notifications.map((item) => item.kind)).toEqual(["task_due_soon", "task_assigned"]);
-    expect(list.notifications[0]).toMatchObject({ actorType: "system", kind: "task_due_soon" });
-    expect(list.notifications[0].actorId).toBeUndefined();
+    // 两条通知可能落在同一毫秒，排序不做假设：按类型取用
+    expect([...list.notifications.map((item) => item.kind)].sort()).toEqual(["task_assigned", "task_due_soon"]);
+    const reminder = list.notifications.find((item) => item.kind === "task_due_soon")!;
+    expect(reminder).toMatchObject({ actorType: "system" });
+    expect(reminder.actorId).toBeUndefined();
+    expect(list.notifications.find((item) => item.kind === "task_assigned")).toMatchObject({ actorType: "user", actorId: DEMO_MANAGER_ID });
   });
 
   it("周期摘要以系统署名落库、面向整个租户并按周期幂等", async () => {

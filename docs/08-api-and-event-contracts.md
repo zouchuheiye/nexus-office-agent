@@ -52,6 +52,7 @@ type RequestContext = {
 /process-definitions /process-instances /approvals
 /agent/runs /agent/proposals /confirmations
 /agent/proposals/:id /agent/proposals/:id/confirm /agent/proposals/:id/amend
+/agent/task-drafts
 /integrations /integrations/:id/sync /integrations/:id/health
 /notifications /inbox
 /task-command/workspace /task-command/board /task-command/people
@@ -96,6 +97,12 @@ R3 提案（可编辑预览卡）：`GET /agent/proposals/:id` 返回本人可�
 输入包含 message、contextRefs 和 clientRequestId；服务端解析身份与权限。返回 runId 和流式事件地址。
 
 主工作对话调用还包含 `conversationId`，用户消息、Agent 最终答复和实际 Skill/Tool 路由会幂等写回该会话。
+
+### 纪要→任务草稿
+
+`POST /api/v1/agent/task-drafts`（`{text, projectId?}`，需 `work_task:create`）
+
+把一段会议纪要/口头安排拆成可发布的任务包**草稿**：返回 `{source, title, objective, packages[], notes[], model?, generatedAt}`，每条 package 含标题、说明、验收标准、所需技能、负责人**姓名**（不含任何 ID）、优先级、时间、工期、容量点，以及 `missingFields`（待补充字段）与 `warnings`（例如模型给的截止时间已过期被丢弃）。`source` 为 `model`（模型抽取）或 `fallback`（模型不可用/不可解析时按纪要条目拆候选，字段全部待补充）。该接口**只读**：不落库、不发布、不授予权限——发布仍走 `POST /task-command/missions` 的同一套校验；负责人姓名由客户端按名册解析成 `assigneeId`，解析不到按公开承接处理。`text` 少于 10 字返回 `422 VALIDATION_FAILED`；模型不可用且纪要无可拆条目时返回 `TASK_DRAFT_UNAVAILABLE`。
 
 ### 运行事件
 

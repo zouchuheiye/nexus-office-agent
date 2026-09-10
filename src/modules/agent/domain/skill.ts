@@ -43,7 +43,7 @@ export function createDefaultSkillRegistry() {
       "work.update_my_task", "work.cancel_task", "work.initiate_task_handoff", "work.respond_to_task_handoff",
       "work.revoke_task_handoff", "work.get_task_handoff_trail", "work.get_task_progress", "work.get_member_workload",
       "work.find_task", "work.project_task_inventory", "work.list_package_subtasks", "work.add_package_subtask",
-      "work.update_package_subtask", "work.list_my_notifications",
+      "work.update_package_subtask", "work.list_my_notifications", "work.draft_tasks_from_minutes",
     ],
   });
   registry.register({

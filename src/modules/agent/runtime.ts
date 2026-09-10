@@ -16,6 +16,8 @@ import { createPostgresDatabase } from "@/src/platform/database/postgres";
 import { getAgentMemoryService } from "@/src/modules/agent-memory/runtime";
 import { registerAgentMemoryTools } from "@/src/modules/agent-memory/application/agent-tools";
 import { registerOfficeReadTools } from "@/src/modules/agent/application/office-read-tools";
+import { TaskDraftService } from "@/src/modules/agent/application/task-draft";
+import { registerTaskDraftTools } from "@/src/modules/agent/application/task-draft-tools";
 import { registerMemberDirectoryTools } from "@/src/modules/organization/application/member-directory-agent-tools";
 import { getMemberDirectoryService } from "@/src/modules/organization/runtime";
 import { getEnterpriseGovernanceService } from "@/src/modules/enterprise-governance/runtime";
@@ -28,6 +30,7 @@ type AgentRuntimeBundle = {
   tools: ToolRegistry;
   skills: SkillRegistry;
   store: AgentStore;
+  taskDraft: TaskDraftService;
 };
 
 const runtimeGeneration = Symbol("agent");
@@ -62,16 +65,19 @@ function buildAgentRuntime(): AgentRuntimeBundle {
   const store = process.env.DATABASE_URL
     ? new PostgresAgentStore(createPostgresDatabase(process.env.DATABASE_URL))
     : new InMemoryAgentStore();
+  const model = createRuntimeModelGateway();
+  const taskDraft = new TaskDraftService(model);
+  registerTaskDraftTools(tools, taskDraft);
   const orchestrator = new AgentOrchestrator(
     store,
     new ManagementContextProvider(management, taskCommand, memory),
-    createRuntimeModelGateway(),
+    model,
     tools,
     skills,
     taskCommand,
     memory,
   );
-  return { orchestrator, tools, skills, store };
+  return { orchestrator, tools, skills, store, taskDraft };
 }
 
 export function getAgentRuntime(): AgentRuntimeBundle {
@@ -84,4 +90,9 @@ export function getAgentOrchestrator(): AgentOrchestrator {
 
 export function getAgentToolRegistry(): ToolRegistry {
   return getAgentRuntime().tools;
+}
+
+/** P5：纪要→任务草稿服务（只产草稿，发布仍走 task-command 的正式接口）。 */
+export function getTaskDraftService(): TaskDraftService {
+  return getAgentRuntime().taskDraft;
 }

@@ -53,6 +53,21 @@ function proposalMinutesLeft(expiresAt: string) {
   return minutes;
 }
 
+/** P5：纪要拆分接口返回的草稿（只产草稿，不含任何 ID）。 */
+type MinutesDraftPackage = {
+  title: string; description?: string; acceptanceCriteria?: string; requiredSkills: string[];
+  assignmentMode: "direct" | "open_claim"; assigneeName?: string;
+  priority: "critical" | "high" | "medium" | "low";
+  dueAt?: string; startedAt?: string; estimatedDays?: number; capacityPoints?: number;
+  missingFields: string[]; warnings: string[];
+};
+type MinutesDraft = {
+  source: "model" | "fallback";
+  title: string; objective?: string;
+  packages: MinutesDraftPackage[];
+  notes: string[];
+};
+
 const statusCopy: Record<Task["status"], string> = {
   published: "待承接", assigned: "已分派", claimed: "已承接", in_progress: "进行中", blocked: "阻塞", in_review: "待验收", completed: "已完成", cancelled: "已取消",
 };
@@ -152,6 +167,12 @@ export function WorkCommandCenter({
   const [reviewReturnNote, setReviewReturnNote] = useState("");
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishBusy, setPublishBusy] = useState(false);
+  const [publishMode, setPublishMode] = useState<"form" | "minutes">("form");
+  const [minutesDraftText, setMinutesDraftText] = useState("");
+  const [minutesDraft, setMinutesDraft] = useState<MinutesDraft | null>(null);
+  const [minutesSelected, setMinutesSelected] = useState<boolean[]>([]);
+  const [minutesTitle, setMinutesTitle] = useState("");
+  const [minutesBusy, setMinutesBusy] = useState(false);
   const [publishForm, setPublishForm] = useState({
     title: "",
     objective: "",
@@ -404,6 +425,67 @@ export function WorkCommandCenter({
     finally { setPublishBusy(false); }
   }
 
+  /** P5：把一段纪要拆成草稿（只读接口，不落库），草稿进入可逐条勾选/编辑的清单。 */
+  async function draftFromMinutes() {
+    const text = minutesDraftText.trim();
+    if (text.length < 10) { onNotice("请粘贴至少 10 个字的纪要内容"); return; }
+    setMinutesBusy(true);
+    try {
+      const draft = await api<MinutesDraft>("/api/v1/agent/task-drafts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text, projectId: undefined }),
+      });
+      setMinutesDraft(draft);
+      setMinutesSelected(draft.packages.map(() => true));
+      setMinutesTitle(publishForm.title.trim() || draft.title);
+      onNotice(draft.source === "model"
+        ? `已按纪要拆出 ${draft.packages.length} 条候选任务，请逐条确认后再发布`
+        : `模型当前不可用，已按纪要条目拆出 ${draft.packages.length} 条候选（字段待补充）`);
+    } catch (cause) { onNotice(cause instanceof Error ? cause.message : "纪要拆分失败"); }
+    finally { setMinutesBusy(false); }
+  }
+
+  async function submitMinutesImport() {
+    const conversationId = workspace?.conversation.id;
+    const draft = minutesDraft;
+    if (!conversationId || !draft) return;
+    const chosen = draft.packages.filter((_, index) => minutesSelected[index]);
+    if (!chosen.length) { onNotice("请至少勾选一条要发布的任务"); return; }
+    if (minutesTitle.trim().length < 2) { onNotice("请填写使命标题（至少 2 字）"); return; }
+    // 负责人姓名按当前名册解析；解析不到就按公开承接处理并在提示里说明（不编造 ID）。
+    const people = workspace?.people ?? [];
+    const packages = chosen.map((item) => {
+      const matched = item.assigneeName ? people.find((person) => person.displayName === item.assigneeName) : undefined;
+      return {
+        title: item.title,
+        description: item.description, acceptanceCriteria: item.acceptanceCriteria,
+        requiredSkills: item.requiredSkills,
+        assignmentMode: matched ? "direct" as const : "open_claim" as const,
+        assigneeId: matched?.id,
+        priority: item.priority, dueAt: item.dueAt, startedAt: item.startedAt,
+        estimatedDays: item.estimatedDays, capacityPoints: item.capacityPoints,
+      };
+    });
+    const unmatched = chosen.filter((item) => item.assigneeName && !people.some((person) => person.displayName === item.assigneeName)).map((item) => item.assigneeName!);
+    setPublishBusy(true);
+    try {
+      await api("/api/v1/task-command/missions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ conversationId, title: minutesTitle.trim(), objective: draft.objective, priority: publishForm.priority, dueAt: undefined, packages }),
+      });
+      setPublishOpen(false);
+      setMinutesDraft(null); setMinutesDraftText(""); setMinutesSelected([]); setMinutesTitle("");
+      onNotice(unmatched.length
+        ? `已发布 ${packages.length} 个任务包；${unmatched.join("、")} 不在当前名册中，已按公开承接处理，请到任务卡指定负责人`
+        : `已发布 ${packages.length} 个任务包（来源：纪要导入）`);
+      await loadWorkspace();
+      window.dispatchEvent(new Event("nexus:task-command-changed"));
+    } catch (cause) { onNotice(cause instanceof Error ? cause.message : "发布任务失败"); }
+    finally { setPublishBusy(false); }
+  }
+
   async function cancelTask(task: Task) {
     setConfirmAction({ kind: "cancel", task });
   }
@@ -579,7 +661,27 @@ export function WorkCommandCenter({
       </aside>
     </div>
     {handoffTask ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-dialog-title"><header><div><span className="command-kicker"><ArrowRight size={13} />TASK HANDOFF</span><h2 id="handoff-dialog-title">发起交接</h2><p>{handoffTask.title} · 当前版本 {handoffTask.version}</p></div><button type="button" className="icon-button" aria-label="关闭发起交接" onClick={() => setHandoffTask(null)}>×</button></header><label>交接给谁<select value={handoffDraft.toAssigneeId} onChange={(event) => setHandoffDraft((current) => ({ ...current, toAssigneeId: event.target.value }))}><option value="">选择成员</option>{workspace?.people.filter(({ id }) => id !== handoffTask.assigneeId).map((person) => <option value={person.id} key={person.id}>{person.displayName} · {person.orgName ?? ""}</option>)}</select></label><label>交接说明<textarea value={handoffDraft.note} onChange={(event) => setHandoffDraft((current) => ({ ...current, note: event.target.value }))} rows={2} /></label><label>当前进度<textarea value={handoffDraft.currentProgress} onChange={(event) => setHandoffDraft((current) => ({ ...current, currentProgress: event.target.value }))} rows={2} /></label><label>已完成<textarea value={handoffDraft.completedWork} onChange={(event) => setHandoffDraft((current) => ({ ...current, completedWork: event.target.value }))} rows={2} /></label><label>未完成<textarea value={handoffDraft.pendingWork} onChange={(event) => setHandoffDraft((current) => ({ ...current, pendingWork: event.target.value }))} rows={2} /></label><label>注意事项（可选）<textarea value={handoffDraft.attentionPoints} onChange={(event) => setHandoffDraft((current) => ({ ...current, attentionPoints: event.target.value }))} rows={2} /></label><footer><button type="button" onClick={() => setHandoffTask(null)}>取消</button><button type="button" className="primary" disabled={busyTask === handoffTask.id} onClick={() => void submitHandoff()}>{busyTask === handoffTask.id ? "提交中…" : "预览并发起"}<ArrowRight size={13} /></button></footer></section></div> : null}
-    {publishOpen ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-publish" role="dialog" aria-modal="true" aria-labelledby="publish-dialog-title"><header><div><span className="command-kicker"><Radio size={13} />PUBLISH TASK</span><h2 id="publish-dialog-title">发布任务</h2><p>在“已发布”中创建正式任务包，可直接定向到成员或开放承接；AI 发布通道保留在主对话。</p></div><button type="button" className="icon-button" aria-label="关闭发布任务" onClick={() => setPublishOpen(false)}>×</button></header>
+    {publishOpen ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-publish" role="dialog" aria-modal="true" aria-labelledby="publish-dialog-title"><header><div><span className="command-kicker"><Radio size={13} />PUBLISH TASK</span><h2 id="publish-dialog-title">发布任务</h2><p>表单录入或把会议纪要交给 AI 拆成任务包；两种方式都走同一套发布校验。</p></div><button type="button" className="icon-button" aria-label="关闭发布任务" onClick={() => { setPublishOpen(false); setMinutesDraft(null); }}>×</button></header>
+      <div className="publish-mode-tabs" role="tablist" aria-label="发布方式">
+        <button type="button" role="tab" aria-selected={publishMode === "form"} className={publishMode === "form" ? "active" : ""} onClick={() => setPublishMode("form")}>表单录入</button>
+        <button type="button" role="tab" aria-selected={publishMode === "minutes"} className={publishMode === "minutes" ? "active" : ""} onClick={() => setPublishMode("minutes")}>从纪要批量导入</button>
+      </div>
+      {publishMode === "minutes" ? <>
+        <label>粘贴会议纪要或口头安排<textarea value={minutesDraftText} onChange={(event) => { setMinutesDraftText(event.target.value); setMinutesDraft(null); }} rows={6} placeholder={"如：\n1. 周然在 10/1 前完成灰度压测报告，验收标准是含 P95 延迟与错误率\n2. 林悦把客服话术库更新到 v2"} /></label>
+        <div className="publish-minutes-actions"><button type="button" disabled={minutesBusy || minutesDraftText.trim().length < 10} onClick={() => void draftFromMinutes()}>{minutesBusy ? "正在拆分…" : "让 AI 拆成任务草稿"}</button><small>只生成草稿，不会直接创建任务</small></div>
+        {minutesDraft ? <div className="publish-minutes-draft">
+          {minutesDraft.notes.map((note) => <p className="publish-minutes-note" key={note}>{note}</p>)}
+          <label>使命标题 *<input value={minutesTitle} onChange={(event) => setMinutesTitle(event.target.value)} /></label>
+          <div className="publish-minutes-list">{minutesDraft.packages.map((item, index) => <label className={`publish-minutes-item${minutesSelected[index] ? " is-selected" : ""}`} key={`${item.title}-${index}`}>
+            <span className="publish-minutes-pick"><input type="checkbox" checked={Boolean(minutesSelected[index])} onChange={(event) => setMinutesSelected((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.checked : value))} /><b>{item.title}</b></span>
+            <small>{item.assigneeName ? `负责人（纪要里写的）：${item.assigneeName}` : "未指定负责人，将按公开承接发布"} · {priorityCopy[item.priority]}{item.dueAt ? ` · 截止 ${item.dueAt.slice(0, 10)}` : ""}</small>
+            {item.description ? <small>{item.description}</small> : null}
+            {item.missingFields.length ? <small className="publish-minutes-missing">待补充：{item.missingFields.join("、")}</small> : null}
+            {item.warnings.map((warning) => <small className="publish-minutes-warning" key={warning}>{warning}</small>)}
+          </label>)}</div>
+          <footer><button type="button" onClick={() => { setMinutesDraft(null); setMinutesSelected([]); }}>重新拆分</button><button type="button" className="primary" disabled={publishBusy || !minutesSelected.some(Boolean)} onClick={() => void submitMinutesImport()}>{publishBusy ? "发布中…" : `发布选中的 ${minutesSelected.filter(Boolean).length} 条`}<ArrowRight size={13} /></button></footer>
+        </div> : null}
+      </> : <>
       <label>使命标题 *<input value={publishForm.title} onChange={(event) => setPublishForm((current) => ({ ...current, title: event.target.value }))} placeholder="如：华东交付冲刺" /></label>
       <label>目标<input value={publishForm.objective} onChange={(event) => setPublishForm((current) => ({ ...current, objective: event.target.value }))} placeholder="本轮要达成的结果（可选）" /></label>
       <div className="work-dialog-row"><label>优先级<select value={publishForm.priority} onChange={(event) => setPublishForm((current) => ({ ...current, priority: event.target.value as PublishPackageDraft["priority"] }))}>{(["critical", "high", "medium", "low"] as const).map((value) => <option value={value} key={value}>{priorityCopy[value]}</option>)}</select></label><label>截止（可选）<input type="date" value={publishForm.dueAt.slice(0, 10)} onChange={(event) => setPublishForm((current) => ({ ...current, dueAt: event.target.value ? `${event.target.value}T18:00:00.000+08:00` : "" }))} /></label></div>
@@ -591,7 +693,9 @@ export function WorkCommandCenter({
         <div className="work-dialog-row"><label>所需技能<input value={item.requiredSkills} onChange={(event) => setPublishForm((current) => ({ ...current, packages: current.packages.map((entry, entryIndex) => entryIndex === index ? { ...entry, requiredSkills: event.target.value } : entry) }))} placeholder="逗号分隔（可选）" /></label><label>优先级<select value={item.priority} onChange={(event) => setPublishForm((current) => ({ ...current, packages: current.packages.map((entry, entryIndex) => entryIndex === index ? { ...entry, priority: event.target.value as PublishPackageDraft["priority"] } : entry) }))}>{(["critical", "high", "medium", "low"] as const).map((value) => <option value={value} key={value}>{priorityCopy[value]}</option>)}</select></label><label>工期（天）<input type="number" min={1} max={365} value={item.estimatedDays} onChange={(event) => setPublishForm((current) => ({ ...current, packages: current.packages.map((entry, entryIndex) => entryIndex === index ? { ...entry, estimatedDays: event.target.value } : entry) }))} /></label><label>容量点<input type="number" min={1} max={40} value={item.capacityPoints} onChange={(event) => setPublishForm((current) => ({ ...current, packages: current.packages.map((entry, entryIndex) => entryIndex === index ? { ...entry, capacityPoints: event.target.value } : entry) }))} /></label></div>
       </fieldset>)}</div>
       <button type="button" className="publish-add-package" onClick={() => setPublishForm((current) => ({ ...current, packages: [...current.packages, emptyPublishPackage()] }))}>+ 再加一个任务包</button>
-      <footer><button type="button" onClick={() => setPublishOpen(false)}>取消</button><button type="button" className="primary" disabled={publishBusy} onClick={() => void submitPublish()}>{publishBusy ? "发布中…" : "确认发布"}<ArrowRight size={13} /></button></footer></section></div> : null}
+      <footer><button type="button" onClick={() => setPublishOpen(false)}>取消</button><button type="button" className="primary" disabled={publishBusy} onClick={() => void submitPublish()}>{publishBusy ? "发布中…" : "确认发布"}<ArrowRight size={13} /></button></footer>
+      </>}
+      </section></div> : null}
     {confirmAction ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="task-confirm-title"><h2 id="task-confirm-title">确认操作</h2><p>{confirmAction.kind === "cancel" ? `确认取消任务「${confirmAction.task?.title}」？取消后不可恢复。` : confirmAction.kind === "accept" ? "确认签收交接？签收后任务责任将切换到你的名下。" : confirmAction.kind === "approve_review" ? `确认验收通过「${confirmAction.task?.title}」？任务将标记为已完成，操作将记录验收人。` : "确认撤回交接？对方将不能再签收。"}</p><footer><button type="button" onClick={() => setConfirmAction(null)}>返回</button><button type="button" className="primary" onClick={() => void executeConfirmAction()}>确认</button></footer></section></div> : null}
     {rejectHandoffDraft ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="reject-handoff-title"><h2 id="reject-handoff-title">退回交接</h2><p>请填写退回原因，至少 4 个字。</p><textarea autoFocus value={rejectHandoffDraft.responseNote} onChange={(event) => setRejectHandoffDraft((current) => current ? { ...current, responseNote: event.target.value } : current)} rows={4} /><footer><button type="button" onClick={() => setRejectHandoffDraft(null)}>取消</button><button type="button" className="primary" onClick={() => void submitRejectHandoff()}>确认退回</button></footer></section></div> : null}
     {reviewSubmitTask ? <div className="work-dialog-backdrop" role="presentation"><section className="work-dialog work-dialog-compact" role="dialog" aria-modal="true" aria-labelledby="review-submit-title"><h2 id="review-submit-title">提交验收</h2><p>任务将进入“待验收”，由发布人核验。证据必须是可核验引用（每行一条）：<b>http(s) 链接</b> 或 <b>类型:引用</b>（如 document:xxx、minutes:…、artifact:uuid），不能只写“已完成”。</p><textarea autoFocus value={reviewEvidenceDraft} onChange={(event) => setReviewEvidenceDraft(event.target.value)} rows={5} placeholder={reviewSubmitTask.evidenceRefs.length ? "已有证据可直接提交，或补充新证据…" : "https://… 或 document:… ，每行一条"} /><footer><button type="button" onClick={() => { setReviewSubmitTask(null); setReviewEvidenceDraft(""); }}>取消</button><button type="button" className="primary" disabled={busyTask === reviewSubmitTask.id || (!reviewEvidenceDraft.trim() && !reviewSubmitTask.evidenceRefs.length)} onClick={() => void submitReview(reviewSubmitTask)}>{busyTask === reviewSubmitTask.id ? "提交中…" : "提交验收"}<Check size={13} /></button></footer></section></div> : null}

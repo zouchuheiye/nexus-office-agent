@@ -175,6 +175,23 @@ flowchart LR
 
 **空态引导**：对话为空时给出一句可点的示例（分派任务／登记新员工／拆解项目），点一下填进输入框，降低"不知道该说什么"的门槛。
 
+### 4.6 纪要文本批量导入任务
+
+「发布任务」对话框有两个页签：**表单录入**（原有路径）与**从纪要批量导入**。后者面向"开完会有一段纪要，想直接变成任务"的场景：
+
+1. 粘贴会议纪要或口头安排（≥10 字）；
+2. 点「让 AI 拆成任务草稿」→ 走 `POST /api/v1/agent/task-drafts`（只读，`work_task:create`）：模型按严格 JSON 抽出使命标题、整体目标与多条任务包（标题／说明／验收标准／所需技能／负责人**姓名**／优先级／时间／工期／容量点）；
+3. 页面逐条列出候选，可勾选、可看到每条「待补充」的字段与提醒，并填使命标题；
+4. 点「发布选中的 N 条」→ 走 `POST /task-command/missions` 的**同一套校验**发布（与表单录入完全一致），未被选中的条目不落库。
+
+坚守的边界：
+
+- **只产草稿**：草稿接口不落库、不发布、不授予权限；集成测试断言草稿前后 `publishedByMe` 数量不变。
+- **不编造 ID**：模型只允许返回负责人**姓名**；页面按当前名册解析成 `assigneeId`，解析不到就按公开承接发布并在提示里点名说明（不会静默错配）。
+- **不编造时间**：模型给的截止时间必须晚于当前时间（与 E-152 的发布闸门一致），过期或与开始时间冲突就丢弃并标注提醒，而不是让发布阶段撞库约束。
+- **模型不可用/返回不可解析时仍可用**：退化为"按纪要条目拆候选"，字段全部待补充，由既有"缺字段不阻断"逻辑继续兜底。
+- Agent 侧同一能力为只读工具 `work.draft_tasks_from_minutes`（R0/never），用于对话里"把这段纪要拆成任务"；真正发布仍要经 `work.publish_task_bundle` 的人工确认。
+
 ## 5. HTTP 契约
 
 | 方法 | 路径 | 作用 |
@@ -183,6 +200,7 @@ flowchart LR
 | `POST` | `/api/v1/task-command/templates` | 创建当前用户可见的任务模板，缺失字段不阻断 |
 | `PATCH` | `/api/v1/task-command/templates/{id}` | 按 `expectedVersion` 修改模板字段，仍不正式分派 |
 | `POST` | `/api/v1/task-command/missions` | 人工发布一个使命与任务包集合 |
+| `POST` | `/api/v1/agent/task-drafts` | 把纪要拆成任务包草稿（只读，不落库；发布仍走 `/missions`） |
 | `POST` | `/api/v1/task-command/packages/{id}/claim` | 用 `expectedVersion` 主动承接 |
 | `POST` | `/api/v1/task-command/packages/{id}/transition` | 用 `expectedVersion` 推进状态、提交证据或阻塞原因 |
 | `GET` | `/api/v1/task-command/packages/{id}/subtasks` | 只读列出子任务与进度（done/total） |

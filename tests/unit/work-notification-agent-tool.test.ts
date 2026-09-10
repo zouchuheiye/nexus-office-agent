@@ -9,6 +9,9 @@ import {
 } from "@/src/modules/task-command/infrastructure/in-memory-repository";
 import { assertToolPolicy, ToolRegistry } from "@/src/modules/agent/domain/tool";
 import { createDefaultSkillRegistry } from "@/src/modules/agent/domain/skill";
+import { TaskDraftService } from "@/src/modules/agent/application/task-draft";
+import { registerTaskDraftTools } from "@/src/modules/agent/application/task-draft-tools";
+import { UnavailableModelGateway } from "@/src/modules/agent/domain/model-gateway";
 import { createDevelopmentRequestContext } from "@/src/platform/context/development-context";
 
 const TOOL_ID = "work.list_my_notifications";
@@ -40,6 +43,8 @@ describe("P4 站内通知 Agent 工具", () => {
 
   it("每个任务协同工具都能解析到所属 Skill（阶段进度展示人话标签的前提）", () => {
     const { registry } = setup();
+    // 纪要拆解工具由 agent 模块注册，也要一起纳入不变量
+    registerTaskDraftTools(registry, new TaskDraftService(new UnavailableModelGateway()));
     const skills = createDefaultSkillRegistry();
     const taskToolIds = registry.list().map((item) => item.id).filter((id) => id.startsWith("work.") || id.startsWith("communication."));
     expect(taskToolIds.length).toBeGreaterThan(10);
