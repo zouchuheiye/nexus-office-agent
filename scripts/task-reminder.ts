@@ -9,7 +9,8 @@ if (!process.env.DATABASE_URL && existsSync(".env.local")) {
 import { createPostgresDatabase } from "../src/platform/database/postgres";
 import { PostgresTaskCommandRepository } from "../src/modules/task-command/infrastructure/postgres-repository";
 import { TaskCommandService } from "../src/modules/task-command/application/service";
-import { createDevelopmentRequestContext } from "../src/platform/context/development-context";
+import { DEFAULT_TASK_REMINDER_OPTIONS, TaskReminderWorker } from "../src/modules/task-command/application/reminder-worker";
+import { PostgresTenantDirectory } from "../src/platform/workers/postgres-work-repositories";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -17,33 +18,51 @@ if (!databaseUrl) {
   process.exitCode = 1;
 }
 
-async function runScan() {
+function positiveInteger(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error("REMINDER_CONFIGURATION_INVALID");
+  return parsed;
+}
+
+/**
+ * 提醒扫描的手工/一次性入口。常驻调度请用 `WORKER_ROLES=task-reminder npm run worker`：
+ * 那条路径有 supervisor 的租户枚举、心跳与优雅排空。
+ *
+ * 该脚本与常驻 Worker 走同一个系统扫描入口（`runScheduledReminderScan`）：
+ * 池消息与通知都以 system 署名写入，不借用任何同事身份，也不再只扫演示租户。
+ */
+async function main() {
   const database = createPostgresDatabase(databaseUrl!);
+  const worker = new TaskReminderWorker(
+    new TaskCommandService(new PostgresTaskCommandRepository(database)),
+    {
+      intervalMs: positiveInteger(process.env.TASK_REMINDER_INTERVAL_MS, DEFAULT_TASK_REMINDER_OPTIONS.intervalMs),
+      dueSoonHours: positiveInteger(process.env.TASK_REMINDER_DUE_SOON_HOURS, DEFAULT_TASK_REMINDER_OPTIONS.dueSoonHours),
+      blockedEscalationHours: positiveInteger(process.env.TASK_REMINDER_BLOCKED_HOURS, DEFAULT_TASK_REMINDER_OPTIONS.blockedEscalationHours),
+      timeoutMs: positiveInteger(process.env.TASK_REMINDER_TIMEOUT_MS, DEFAULT_TASK_REMINDER_OPTIONS.timeoutMs),
+    },
+  );
   try {
-    const service = new TaskCommandService(new PostgresTaskCommandRepository(database));
-    const context = createDevelopmentRequestContext("task-reminder");
-    const result = await service.runReminderScan(context, {});
-    console.info(JSON.stringify(result));
+    const tenantIndex = process.argv.indexOf("--tenant");
+    const explicitTenant = tenantIndex >= 0 ? process.argv[tenantIndex + 1] : undefined;
+    const tenants = explicitTenant ? [explicitTenant] : await new PostgresTenantDirectory(database).listActiveTenantIds();
+    if (!tenants.length) {
+      console.info(JSON.stringify({ tenants: 0, results: [] }));
+      return;
+    }
+    const results = [];
+    for (const tenantId of tenants) {
+      // 手工入口显式忽略节流：每次运行都真的扫一遍。
+      results.push({ tenantId, ...(await worker.processTenant(tenantId, "task-reminder-script", new Date())) });
+    }
+    console.info(JSON.stringify({ tenants: tenants.length, results }));
   } finally {
     await database.close();
   }
-}
-
-async function main() {
-  const watch = process.argv.includes("--watch");
-  const intervalIndex = process.argv.indexOf("--interval");
-  const intervalMinutes = intervalIndex >= 0 ? Number(process.argv[intervalIndex + 1]) : 60;
-  if (!Number.isFinite(intervalMinutes) || intervalMinutes <= 0) throw new Error("INTERVAL_INVALID");
-  await runScan();
-  if (!watch) return;
-  console.info(`task-reminder watch mode: next scan in ${intervalMinutes} minutes`);
-  const timer = setInterval(() => { void runScan(); }, intervalMinutes * 60_000);
-  process.once("SIGTERM", () => { clearInterval(timer); process.exit(0); });
-  process.once("SIGINT", () => { clearInterval(timer); process.exit(0); });
 }
 
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
-

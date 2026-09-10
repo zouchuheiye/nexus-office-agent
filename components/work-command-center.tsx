@@ -57,7 +57,16 @@ const notificationKindCopy: Record<WorkspaceNotification["kind"], string> = {
   handoff_responded: "交接结果",
   review_requested: "待你验收",
   review_decided: "验收结果",
+  task_due_soon: "任务临期",
+  task_overdue: "任务逾期",
+  task_blocked: "任务阻塞",
 };
+
+/** 系统署名的提醒不指向任何同事；有时效类提醒用警示色标签。 */
+function notificationAttribution(notification: WorkspaceNotification, resolveName: (id: string | undefined) => string | undefined) {
+  if (notification.actorType === "system" || !notification.actorId) return "系统提醒";
+  return resolveName(notification.actorId) ?? "成员";
+}
 const dueCopy: Record<string, string> = { overdue: "已逾期", due_soon: "临期", normal: "进行中", done: "已完成" };
 const timelineEventCopy: Record<string, string> = {
   mission_published: "使命发布", package_published: "任务发布", package_claimed: "已承接", package_status_changed: "状态变更",
@@ -535,7 +544,7 @@ export function WorkCommandCenter({
           {loading && !workspace ? <TaskRailState icon={LoaderCircle} title="正在同步通知" detail="" spinning /> : error && !workspace ? <TaskRailState icon={CircleAlert} title="通知暂时不可用" detail={error} action={() => void loadWorkspace()} /> : !(workspace?.notifications.length) ? <TaskRailState icon={Bell} title="还没有通知" detail="任务分派、承接、交接与验收都会在这里提醒你，不需要自己反复刷新。" /> : <>
             <div className="notification-list-head"><span><b>{workspace.unreadNotificationCount}</b> 条未读 · 共 {workspace.notifications.length} 条</span>{workspace.unreadNotificationCount ? <button type="button" onClick={() => void markAllRead()}><CheckCheck size={13} />全部已读</button> : null}</div>
             {workspace.notifications.map((notification) => <article className={`notification-card${notification.readAt ? "" : " is-unread"}`} key={notification.id}>
-              <div className="notification-card-top"><span className="notification-kind">{notificationKindCopy[notification.kind]}</span>{notification.readAt ? null : <i className="notification-dot" aria-label="未读" />}<small>{peopleById.get(notification.actorId)?.displayName ?? "成员"} · {formatTime(notification.createdAt)}</small></div>
+              <div className="notification-card-top"><span className="notification-kind">{notificationKindCopy[notification.kind]}</span>{notification.readAt ? null : <i className="notification-dot" aria-label="未读" />}<small>{notificationAttribution(notification, (id) => peopleById.get(id ?? "")?.displayName)} · {formatTime(notification.createdAt)}</small></div>
               <h4>{notification.title}</h4>
               <p>{notification.body}</p>
               <footer>
@@ -545,7 +554,7 @@ export function WorkCommandCenter({
             </article>)}
           </>}
         </div> : <div className="message-pool-list">
-          {loading && !workspace ? <TaskRailState icon={LoaderCircle} title="正在同步消息" detail="" spinning /> : error && !workspace ? <TaskRailState icon={CircleAlert} title="消息池暂时不可用" detail={error} action={() => void loadWorkspace()} /> : !workspace?.messagePools.some((pool) => pool.messages.length) ? <TaskRailState icon={MessageCircle} title="还没有沟通消息" detail="推送只用于同步、征询和反馈，不会创建任务。" /> : workspace.messagePools.map((pool) => <section className="message-pool-section" key={pool.key}><header><span>{pool.scope === "company" ? "公司" : "部门"}</span><h3>{pool.name}</h3><b>{pool.messages.length}</b></header>{pool.messages.map((message) => <article className="message-pool-card" key={message.id}><h4>{message.subject}</h4><p>{message.content}</p><footer><span>{peopleById.get(message.authorId)?.displayName ?? "成员"} · {formatTime(message.createdAt)}</span><button type="button" onClick={() => onQueryChange(`我想针对消息“${message.subject}”补充反馈。请使用 communication.add_feedback 工具向消息 ${message.id} 写入以下反馈：`)}>{message.feedback.length ? `${message.feedback.length} 条反馈` : "反馈"}</button></footer>{message.feedback.length ? <details><summary>查看反馈</summary>{message.feedback.slice(-3).map((feedback) => <p className="message-pool-feedback" key={feedback.id}><b>{peopleById.get(feedback.authorId)?.displayName ?? "成员"}</b>{feedback.content}</p>)}</details> : null}</article>)}</section>)}
+          {loading && !workspace ? <TaskRailState icon={LoaderCircle} title="正在同步消息" detail="" spinning /> : error && !workspace ? <TaskRailState icon={CircleAlert} title="消息池暂时不可用" detail={error} action={() => void loadWorkspace()} /> : !workspace?.messagePools.some((pool) => pool.messages.length) ? <TaskRailState icon={MessageCircle} title="还没有沟通消息" detail="推送只用于同步、征询和反馈，不会创建任务。" /> : workspace.messagePools.map((pool) => <section className="message-pool-section" key={pool.key}><header><span>{pool.scope === "company" ? "公司" : "部门"}</span><h3>{pool.name}</h3><b>{pool.messages.length}</b></header>{pool.messages.map((message) => <article className="message-pool-card" key={message.id}><h4>{message.subject}</h4><p>{message.content}</p><footer><span>{message.authorType === "system" ? "系统提醒" : peopleById.get(message.authorId ?? "")?.displayName ?? "成员"} · {formatTime(message.createdAt)}</span><button type="button" onClick={() => onQueryChange(`我想针对消息“${message.subject}”补充反馈。请使用 communication.add_feedback 工具向消息 ${message.id} 写入以下反馈：`)}>{message.feedback.length ? `${message.feedback.length} 条反馈` : "反馈"}</button></footer>{message.feedback.length ? <details><summary>查看反馈</summary>{message.feedback.slice(-3).map((feedback) => <p className="message-pool-feedback" key={feedback.id}><b>{peopleById.get(feedback.authorId)?.displayName ?? "成员"}</b>{feedback.content}</p>)}</details> : null}</article>)}</section>)}
         </div>}
       </aside>
     </div>

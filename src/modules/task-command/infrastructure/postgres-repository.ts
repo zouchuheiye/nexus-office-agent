@@ -56,17 +56,18 @@ const mapArtifactVersion = (row: Row): WorkArtifactVersion => ({
 const poolKey = (scope: string, orgUnitId: unknown): WorkPoolMessage["poolKey"] => scope === "company" ? "company" : text(orgUnitId);
 const mapPoolMessage = (row: Row): WorkPoolMessage => ({
   id: text(row.id), tenantId: text(row.tenant_id), poolKey: poolKey(text(row.pool_scope), row.org_unit_id), poolScope: row.pool_scope as WorkPoolMessage["poolScope"], orgUnitId: optionalText(row.org_unit_id),
-  subject: text(row.subject), content: text(row.content), kind: (row.kind ?? "notice") as WorkPoolMessage["kind"], authorId: text(row.author_id), source: row.source as WorkPoolMessage["source"], sourceRunId: optionalText(row.source_run_id), createdAt: text(row.created_at),
+  subject: text(row.subject), content: text(row.content), kind: (row.kind ?? "notice") as WorkPoolMessage["kind"], authorType: (row.author_type ?? "user") as WorkPoolMessage["authorType"], authorId: optionalText(row.author_id), source: row.source as WorkPoolMessage["source"], sourceRunId: optionalText(row.source_run_id), createdAt: text(row.created_at),
 });
 const mapPoolFeedback = (row: Row): WorkPoolFeedback => ({
   id: text(row.id), tenantId: text(row.tenant_id), messageId: text(row.message_id), content: text(row.content), authorId: text(row.author_id), createdAt: text(row.created_at),
 });
 const mapMessageEvent = (row: Row): WorkMessageEvent => ({
   sequence: Number(row.sequence), id: text(row.id), tenantId: text(row.tenant_id), poolKey: poolKey(text(row.pool_scope), row.org_unit_id), poolScope: row.pool_scope as WorkMessageEvent["poolScope"], orgUnitId: optionalText(row.org_unit_id),
-  messageId: text(row.message_id), eventType: row.event_type as WorkMessageEvent["eventType"], actorId: text(row.actor_id), occurredAt: text(row.occurred_at),
+  messageId: text(row.message_id), eventType: row.event_type as WorkMessageEvent["eventType"], actorType: (row.actor_type ?? "user") as WorkMessageEvent["actorType"], actorId: optionalText(row.actor_id), occurredAt: text(row.occurred_at),
 });
 const mapNotification = (row: Row): WorkTaskNotification => ({
-  id: text(row.id), tenantId: text(row.tenant_id), recipientId: text(row.recipient_id), actorId: text(row.actor_id),
+  id: text(row.id), tenantId: text(row.tenant_id), recipientId: text(row.recipient_id),
+  actorType: (row.actor_type ?? "user") as WorkTaskNotification["actorType"], actorId: optionalText(row.actor_id),
   kind: row.kind as WorkTaskNotification["kind"], title: text(row.title), body: text(row.body),
   refType: row.ref_type as WorkTaskNotification["refType"], refId: text(row.ref_id), packageId: text(row.package_id),
   sourceEventId: text(row.source_event_id), createdAt: text(row.created_at), readAt: optionalText(row.read_at),
@@ -321,6 +322,25 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
     });
   }
 
+  /** 后台提醒扫描的批量写入，按唯一键幂等，返回真正新增条数。 */
+  async saveNotifications(notifications: WorkTaskNotification[]) {
+    if (!notifications.length) return 0;
+    const tenantId = notifications[0].tenantId;
+    return this.database.withTenant(tenantId, async (db) => {
+      let saved = 0;
+      for (const item of notifications) {
+        const rows = await db.query(
+          `INSERT INTO work_task_notifications(id,tenant_id,recipient_id,actor_type,actor_id,kind,title,body,ref_type,ref_id,package_id,source_event_id,created_at,read_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+           ON CONFLICT (tenant_id, recipient_id, source_event_id) DO NOTHING RETURNING id`,
+          [item.id,item.tenantId,item.recipientId,item.actorType,item.actorId ?? null,item.kind,item.title,item.body,item.refType,item.refId,item.packageId,item.sourceEventId,item.createdAt,item.readAt ?? null],
+        );
+        saved += rows.length;
+      }
+      return saved;
+    });
+  }
+
   async listNotifications(tenantId: string, recipientId: string, options: { unreadOnly?: boolean; limit: number }) {
     const limit = Math.min(Math.max(options.limit, 1), 100);
     return this.database.withTenant(tenantId, async (db) => (await db.query(
@@ -386,9 +406,9 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
 
   async publishPoolMessage(message: WorkPoolMessage, event: Omit<WorkMessageEvent, "sequence">) {
     return this.database.withTenant(message.tenantId, async (db) => {
-      const inserted = await db.query(`INSERT INTO work_pool_messages(id,tenant_id,pool_scope,org_unit_id,subject,content,kind,author_id,source,source_run_id,created_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING RETURNING id`,
-      [message.id,message.tenantId,message.poolScope,message.orgUnitId ?? null,message.subject,message.content,message.kind,message.authorId,message.source,message.sourceRunId ?? null,message.createdAt]);
+      const inserted = await db.query(`INSERT INTO work_pool_messages(id,tenant_id,pool_scope,org_unit_id,subject,content,kind,author_type,author_id,source,source_run_id,created_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT DO NOTHING RETURNING id`,
+      [message.id,message.tenantId,message.poolScope,message.orgUnitId ?? null,message.subject,message.content,message.kind,message.authorType,message.authorId ?? null,message.source,message.sourceRunId ?? null,message.createdAt]);
       if (!inserted.length) {
         const rows = message.sourceRunId
           ? await db.query("SELECT * FROM work_pool_messages WHERE tenant_id=$1 AND source_run_id=$2", [message.tenantId,message.sourceRunId])
@@ -436,14 +456,14 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
   }
 
   private async insertMessageEvent(db: DatabaseExecutor, value: Omit<WorkMessageEvent, "sequence">) {
-    await db.query(`INSERT INTO work_message_events(id,tenant_id,pool_scope,org_unit_id,message_id,event_type,actor_id,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [value.id,value.tenantId,value.poolScope,value.orgUnitId ?? null,value.messageId,value.eventType,value.actorId,value.occurredAt]);
+    await db.query(`INSERT INTO work_message_events(id,tenant_id,pool_scope,org_unit_id,message_id,event_type,actor_type,actor_id,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [value.id,value.tenantId,value.poolScope,value.orgUnitId ?? null,value.messageId,value.eventType,value.actorType,value.actorId ?? null,value.occurredAt]);
   }
 
   /** 与业务变更同事务写入；同一事件对同一收件人只留一条。 */
   private async insertNotification(db: DatabaseExecutor, value: WorkTaskNotification) {
-    await db.query(`INSERT INTO work_task_notifications(id,tenant_id,recipient_id,actor_id,kind,title,body,ref_type,ref_id,package_id,source_event_id,created_at,read_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (tenant_id, recipient_id, source_event_id) DO NOTHING`,
-      [value.id,value.tenantId,value.recipientId,value.actorId,value.kind,value.title,value.body,value.refType,value.refId,value.packageId,value.sourceEventId,value.createdAt,value.readAt ?? null]);
+    await db.query(`INSERT INTO work_task_notifications(id,tenant_id,recipient_id,actor_type,actor_id,kind,title,body,ref_type,ref_id,package_id,source_event_id,created_at,read_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (tenant_id, recipient_id, source_event_id) DO NOTHING`,
+      [value.id,value.tenantId,value.recipientId,value.actorType,value.actorId ?? null,value.kind,value.title,value.body,value.refType,value.refId,value.packageId,value.sourceEventId,value.createdAt,value.readAt ?? null]);
   }
 }

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { RequestContext } from "@/src/platform/context/request-context";
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
 import type { AddPackageSubtaskInput, AppendPoolFeedbackInput, AppendTaskArtifactVersionInput, CreateTaskTemplateInput, DeletePackageSubtaskInput, ExportReportInput, GeneratePeriodicSummaryInput, InitiateTaskHandoffInput, ListPackageSubtasksInput, PublishMissionInput, PublishPoolMessageInput, RegisterTaskArtifactInput, RespondToTaskHandoffInput, RunReminderScanInput, TransitionPackageInput, UpdatePackageSubtaskInput, UpdateTaskTemplateInput } from "@/src/modules/task-command/application/schemas";
-import { canMutatePackageSubtasks, claimWorkPackage, collectTaskReminderCandidates, completeWorkPackageSubtask, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, createWorkPackageSubtask, createWorkTaskNotification, deterministicUuid, dueStateOf, handoffWorkPackage, reopenWorkPackageSubtask, respondToTaskHandoff, revokeTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTaskNotification, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
+import { canMutatePackageSubtasks, claimWorkPackage, collectTaskReminderCandidates, completeWorkPackageSubtask, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, createWorkPackageSubtask, createWorkTaskNotification, deterministicUuid, dueStateOf, handoffWorkPackage, reopenWorkPackageSubtask, respondToTaskHandoff, revokeTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkPoolMessage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTaskNotification, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
 
 function hasPermission(context: RequestContext, permission: string): boolean {
   const [resource, action] = permission.split(":");
@@ -18,7 +18,7 @@ function event(input: Omit<WorkTaskEvent, "sequence" | "id" | "occurredAt">): Om
 }
 
 function messageEvent(input: Omit<WorkMessageEvent, "sequence" | "id" | "occurredAt">): Omit<WorkMessageEvent, "sequence"> {
-  return { ...input, id: randomUUID(), occurredAt: new Date().toISOString() };
+  return { ...input, actorId: input.actorType === "system" ? undefined : input.actorId, id: randomUUID(), occurredAt: new Date().toISOString() };
 }
 
 function canAccessOrgScope(context: RequestContext, orgUnitId: string): boolean {
@@ -53,6 +53,7 @@ function taskNotification(input: {
   return [createWorkTaskNotification({
     tenantId: input.event.tenantId,
     recipientId: input.recipientId,
+    actorType: "user",
     actorId: input.actorId,
     kind: input.kind,
     title: input.title,
@@ -62,6 +63,40 @@ function taskNotification(input: {
     packageId: input.packageId,
     sourceEventId: input.event.id,
   })];
+}
+
+/**
+ * 定时提醒（临期/逾期/阻塞）：由后台扫描产生，没有对应的任务事件行，
+ * 因此用确定性的 sourceEventId 做幂等键——重复扫描或两个实例同时跑都不会重复提醒。
+ */
+function reminderNotification(input: {
+  tenantId: string;
+  recipientId?: string;
+  actorType: WorkTaskNotification["actorType"];
+  actorId?: string;
+  kind: WorkTaskNotification["kind"];
+  title: string;
+  body: string;
+  packageId: string;
+  dedupKey: string;
+  now: Date;
+}): WorkTaskNotification[] {
+  // 系统署名不是人，不存在"自己提醒自己"的抑制；人工触发时才跳过自己。
+  if (!input.recipientId) return [];
+  if (input.actorType === "user" && input.recipientId === input.actorId) return [];
+  return [createWorkTaskNotification({
+    tenantId: input.tenantId,
+    recipientId: input.recipientId,
+    actorType: input.actorType,
+    actorId: input.actorId,
+    kind: input.kind,
+    title: input.title,
+    body: input.body,
+    refType: "work_package",
+    refId: input.packageId,
+    packageId: input.packageId,
+    sourceEventId: deterministicUuid(input.dedupKey),
+  }, input.now)];
 }
 
 function withDueState(item: WorkPackage): WorkPackageWithDue {
@@ -830,6 +865,7 @@ export class TaskCommandService {
       subject: input.subject,
       content: input.content,
       kind: input.kind ?? "notice",
+      authorType: "user",
       authorId: context.actorId,
       source: execution?.source ?? "human",
       sourceRunId: execution?.sourceRunId,
@@ -841,6 +877,7 @@ export class TaskCommandService {
       orgUnitId: message.orgUnitId,
       messageId: message.id,
       eventType: "message_published",
+      actorType: "user",
       actorId: context.actorId,
     }));
   }
@@ -860,6 +897,7 @@ export class TaskCommandService {
       orgUnitId: message.orgUnitId,
       messageId: message.id,
       eventType: "feedback_published",
+      actorType: "user",
       actorId: context.actorId,
     }));
     return feedback;
@@ -1001,23 +1039,52 @@ export class TaskCommandService {
     return { headers, rows, count: rows.length, generatedAt: new Date().toISOString() };
   }
 
-  /** 后台到期提醒 + F-085 阻塞升级扫描（每天/每小时由脚本触发，池消息按 source_run_id 幂等去重）。 */
+  /** 后台到期提醒 + F-085 阻塞升级扫描（人工/Agent 触发，池消息按 source_run_id 幂等去重）。 */
   async runReminderScan(context: RequestContext, input: RunReminderScanInput) {
     requirePermission(context, "work_task:read");
     requirePermission(context, "message_pool:publish");
-    const now = input.now ? new Date(input.now) : new Date();
-    const dueSoonHours = input.dueSoonHours ?? 72;
-    const blockedEscalationHours = input.blockedEscalationHours ?? 24;
+    return this.reminderScan(context.tenantId, {
+      now: input.now ? new Date(input.now) : new Date(),
+      dueSoonHours: input.dueSoonHours ?? 72,
+      blockedEscalationHours: input.blockedEscalationHours ?? 24,
+      attribution: { source: "agent", actorType: "user", actorId: context.actorId },
+    });
+  }
+
+  /**
+   * P4（第二半）：常驻调度器的系统入口。不经过 HTTP/Agent，也不借用任何同事身份：
+   * 池消息与通知都以 system 署名写入（actor_id/author_id 为空），避免"定时提醒冒充某人发出"。
+   * 该方法的调用点只有后台 Worker；HTTP 与 Agent 通道继续走 runReminderScan（按调用人署名）。
+   */
+  async runScheduledReminderScan(input: { tenantId: string; now?: Date; dueSoonHours?: number; blockedEscalationHours?: number }) {
+    return this.reminderScan(input.tenantId, {
+      now: input.now ?? new Date(),
+      dueSoonHours: input.dueSoonHours ?? 72,
+      blockedEscalationHours: input.blockedEscalationHours ?? 24,
+      attribution: { source: "system", actorType: "system" },
+    });
+  }
+
+  /** 提醒扫描的唯一实现：池消息（公司池公告）与"提醒到人"的通知共用同一批候选。 */
+  private async reminderScan(tenantId: string, input: {
+    now: Date;
+    dueSoonHours: number;
+    blockedEscalationHours: number;
+    attribution: { source: WorkPoolMessage["source"]; actorType: WorkTaskNotification["actorType"]; actorId?: string };
+  }) {
+    const { now, attribution } = input;
     const [packages, people] = await Promise.all([
-      this.repository.listPackages(context.tenantId),
-      this.repository.listPeople(context.tenantId),
+      this.repository.listPackages(tenantId),
+      this.repository.listPeople(tenantId),
     ]);
     const peopleById = new Map(people.map((item) => [item.id, item]));
     const active = packages.filter((item) => !item.isTemplate && !["completed", "cancelled"].includes(item.status));
     const dateKey = now.toISOString().slice(0, 10);
-    const candidates = collectTaskReminderCandidates(packages, { now, dueSoonHours, blockedEscalationHours });
+    const candidates = collectTaskReminderCandidates(packages, { now, dueSoonHours: input.dueSoonHours, blockedEscalationHours: input.blockedEscalationHours });
     const created: Array<{ kind: string; packageId: string; messageId: string }> = [];
+    const notificationItems: Array<{ kind: string; packageId: string; recipientId: string }> = [];
     let deduplicated = 0;
+    let notificationsDeduplicated = 0;
     for (const candidate of candidates) {
       const assignee = candidate.package.assigneeId ? peopleById.get(candidate.package.assigneeId) : undefined;
       const subject = candidate.kind === "overdue" ? `⏰ 任务逾期提醒：${candidate.package.title}`
@@ -1027,12 +1094,52 @@ export class TaskCommandService {
         ? `任务「${candidate.package.title}」已阻塞约 ${candidate.hours.toFixed(1)} 天（阻塞原因：${candidate.package.blockedReason ?? "未填写"}）。请发布人与负责人确认处置。截止 ${candidate.package.dueAt}。`
         : `任务「${candidate.package.title}」${candidate.kind === "overdue" ? `已逾期约 ${candidate.hours.toFixed(1)} 天` : `约 ${candidate.hours.toFixed(1)} 天后到期`}，负责人：${assignee?.displayName ?? (candidate.package.assignmentMode === "open_claim" ? "待承接" : "未分派")}，截止 ${candidate.package.dueAt}。请及时推进。`;
       const dedupKey = `${candidate.kind === "blocked_escalation" ? "task-escalation" : "task-reminder"}:${candidate.package.id}:${candidate.kind}:${dateKey}`;
-      const message = { ...createPoolMessage({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", subject, content, kind: "notice", authorId: context.actorId, source: "agent" }), id: deterministicUuid(dedupKey) };
-      const result = await this.repository.publishPoolMessage(message, messageEvent({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", messageId: message.id, eventType: "message_published", actorId: context.actorId }));
+      const message = { ...createPoolMessage({
+        tenantId, poolKey: "company", poolScope: "company", subject, content, kind: "notice",
+        authorType: attribution.actorType, authorId: attribution.actorId, source: attribution.source,
+      }), id: deterministicUuid(dedupKey) };
+      const result = await this.repository.publishPoolMessage(message, messageEvent({ tenantId, poolKey: "company", poolScope: "company", messageId: message.id, eventType: "message_published", actorType: attribution.actorType, actorId: attribution.actorId }));
       if (result.created) created.push({ kind: candidate.kind, packageId: candidate.package.id, messageId: result.message.id });
       else deduplicated += 1;
+
+      // 提醒到人：临期/逾期给负责人；阻塞升级同时给负责人与发布人（无人承接的公开任务没有收件人）。
+      const kind: WorkTaskNotification["kind"] = candidate.kind === "overdue" ? "task_overdue" : candidate.kind === "due_soon" ? "task_due_soon" : "task_blocked";
+      const title = candidate.kind === "overdue" ? `任务已逾期：${candidate.package.title}`
+        : candidate.kind === "due_soon" ? `任务临期：${candidate.package.title}`
+        : `任务阻塞待处置：${candidate.package.title}`;
+      const body = candidate.kind === "blocked_escalation"
+        ? `任务已阻塞约 ${candidate.hours.toFixed(1)} 天，原因：${candidate.package.blockedReason ?? "未填写"}。请与相关同事确认处置，截止 ${candidate.package.dueAt.slice(0, 10)}。`
+        : candidate.kind === "overdue"
+          ? `已逾期约 ${candidate.hours.toFixed(1)} 天（截止 ${candidate.package.dueAt.slice(0, 10)}），请尽快推进或说明阻塞原因。`
+          : `约 ${candidate.hours.toFixed(1)} 天后到期（截止 ${candidate.package.dueAt.slice(0, 10)}），请及时推进。`;
+      const recipients = [...new Set([
+        candidate.package.assigneeId,
+        candidate.kind === "blocked_escalation" ? candidate.package.publishedBy : undefined,
+      ].filter((value): value is string => Boolean(value)))];
+      for (const recipientId of recipients) {
+        const items = reminderNotification({
+          tenantId, recipientId, actorType: attribution.actorType, actorId: attribution.actorId,
+          kind, title, body, packageId: candidate.package.id,
+          dedupKey: `${dedupKey}:${recipientId}`, now,
+        });
+        if (!items.length) continue;
+        const saved = await this.repository.saveNotifications(items);
+        if (saved > 0) notificationItems.push({ kind, packageId: candidate.package.id, recipientId });
+        else notificationsDeduplicated += 1;
+      }
     }
-    return { scanned: active.length, candidates: candidates.length, created: created.length, deduplicated, items: created, ranAt: now.toISOString() };
+    return {
+      scanned: active.length,
+      candidates: candidates.length,
+      created: created.length,
+      deduplicated,
+      items: created,
+      notificationsCreated: notificationItems.length,
+      notificationsDeduplicated,
+      notificationItems,
+      ranAt: now.toISOString(),
+      attribution: attribution.actorType,
+    };
   }
 
   /** F-083: 周期进度摘要（日报/周报草稿），发布到公司消息池（按期间幂等）。 */
@@ -1066,8 +1173,8 @@ export class TaskCommandService {
       `- 已完成/已取消：${done.length} 项`,
       `请确认后发出；如需详细任务列表可进入任务进度看板查看。`,
     ].join("\n");
-    const message = { ...createPoolMessage({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", subject: `工作进度摘要（${scope === "weekly" ? "周报" : "日报"} · ${periodKey}）`, content, kind: "notice", authorId: context.actorId, source: "agent" }), id: deterministicUuid(`task-summary:${scope}:${periodKey}`) };
-    const result = await this.repository.publishPoolMessage(message, messageEvent({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", messageId: message.id, eventType: "message_published", actorId: context.actorId }));
+    const message = { ...createPoolMessage({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", subject: `工作进度摘要（${scope === "weekly" ? "周报" : "日报"} · ${periodKey}）`, content, kind: "notice", authorType: "user", authorId: context.actorId, source: "agent" }), id: deterministicUuid(`task-summary:${scope}:${periodKey}`) };
+    const result = await this.repository.publishPoolMessage(message, messageEvent({ tenantId: context.tenantId, poolKey: "company", poolScope: "company", messageId: message.id, eventType: "message_published", actorType: "user", actorId: context.actorId }));
     return { scope, periodKey, summary: content, messageId: result.message.id, created: result.created, generatedAt: now.toISOString() };
   }
   private async isTaskVisible(context: RequestContext, task: WorkPackage): Promise<boolean> {

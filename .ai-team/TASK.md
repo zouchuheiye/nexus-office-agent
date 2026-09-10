@@ -32,7 +32,8 @@
 - [x] project-to-act 台账强制门禁（用户要求"台账要一直写"）：`check.mjs --base` 在"改了代码/产品文件但 `.project-to-act/PROJECT_PROGRESS.md` 未更新"时判 blocked（与 TASK.md 同级）；AGENTS.md 固化"长期要求"章节（PROGRESS 每次必写，FEATURES/VERSIONS/ACCEPTANCE 按适用性同步）；新增门禁测试覆盖拦截与放行。
 - [x] 离职名单仅管理员可见（用户要求“只有管理员能看到谁谁谁已离职”）：`includeDeparted=true` 收紧为 `organization_member:admin`，非管理员显式索取返回 `403 ACCESS_DENIED`（不静默降级），默认目录只含在职成员；成员管理卡片仅在 `canManage` 时补取已停用分区；Agent 工具 `organization.list_members` 增加 `includeDeparted` 入参并注明仅管理员可用。
 - [x] P4 站内通知（改造计划 P4 最小版，用户要求继续 P4）：`work_task_notifications`（0049 迁移）+ 六个触发点（定向分派/公开承接被领取/交接发起/交接签收退回撤回/提交验收/验收通过退回）在与业务变更同一事务内通知当事人，收件人等于操作人、部门池公开承接、子任务勾选均不通知；`GET /task-command/notifications`、`POST /notifications/:id/read`、`POST /notifications/read-all` 只作用于本人（越权与不存在统一 404）；workspace 载荷带 `notifications` + `unreadNotificationCount`；工作台右栏「通知」页签 + 顶栏全局未读铃铛；Agent 侧仅只读工具 `work.list_my_notifications`。不含外部通道/Web Push/偏好设置/留存清理。
-- [x] project-to-act 台账同步：本批 P0/P1/P2/P3、成员管理、入职登记、停用进入权、重新启用、台账门禁、离职名单可见性与 P4 站内通知已补记 `PROJECT_PROGRESS.md`（E-139～E-149）、`PROJECT_FEATURES.md`（F-091～F-101）、`PROJECT_VERSIONS.md` 与 `PROJECT_ACCEPTANCE.md`。
+- [x] P4 第二半：提醒挂常驻调度 + 以「系统」署名 + 提醒到人（用户确认"以系统署名"）。新增 Durable Worker 角色 `task-reminder`（活跃租户枚举 + 心跳 + SIGTERM 排空 + 按租户间隔节流 + 重叠保护），`0050` 迁移放宽 `worker_heartbeats.role` 并为池消息/通知/消息事件增加 `author_type`/`actor_type` 与署名- ID 互斥约束；`runScheduledReminderScan` 系统入口以 `system` 署名写池消息/通知/事件并直达负责人（阻塞升级同时到发布人），重复扫描由确定性 ID 幂等；`scripts/task-reminder.ts` 改为复用同一入口并默认遍历活跃租户（移除 `--watch`）。
+- [x] project-to-act 台账同步：本批 P0/P1/P2/P3、成员管理、入职登记、停用进入权、重新启用、台账门禁、离职名单可见性与 P4（站内通知 + 提醒常驻调度）已补记 `PROJECT_PROGRESS.md`（E-139～E-150）、`PROJECT_FEATURES.md`（F-091～F-102）、`PROJECT_VERSIONS.md` 与 `PROJECT_ACCEPTANCE.md`。
 - [ ] P3（后续）/P4/P5：子任务证据附件上传、通知链路、体验细节按产品后续排期推进（本任务不替代产品决策）。
 
 ## Invariants
@@ -92,7 +93,7 @@ P01 复核 MVP-FIX 的 P0/P1 快照、P2 双通道交付（提交验收/验收�
 
 - [x] `npm run typecheck`：exit 0。
 - [x] `npm run lint`：exit 0（零警告）。
-- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（136 文件 575 passed / 26 skipped）。
+- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（138 文件 584 passed / 26 skipped）。
 - [x] P0 导出过滤单测、P1 身份切换集成测试、P2 验收流转单测（review_decision 边界 + reviewNote 事件审计）、P2 amend/supersede 单元与集成测试：通过。
 - [x] P3 单测（双方可拆且旁观者拒绝、完成/重开与证据门禁、in_review 锁定、workspace 进度暴露、Agent 工具注册与 R3 确认策略、schema 证据格式）与 Postgres 集成测试（落库、CAS 冲突、进度聚合、锁定期）：通过。
 - [x] 成员管理测试：域单测（创建/编辑/停用不变量与岗位归属校验）、服务单测（读门禁与 canManage、管理员增改停、越权拒绝、邮箱唯一、版本 CAS、禁止停用自己）、PGlite 集成（CRUD + RLS + users/memberships 审计 + 有进行中任务禁止停用 + 邮箱大小写不敏感唯一）：通过。
@@ -101,6 +102,7 @@ P01 复核 MVP-FIX 的 P0/P1 快照、P2 双通道交付（提交验收/验收�
 - [x] 重新启用测试：域/服务单测（仅停用可启用、版本 CAS、岗位归属、部门不存在、includeDeparted 可见性）、Agent 工具单测（R2 确认策略与预览、启用后不可重复启用）、Postgres 集成（状态恢复 + archived_at 清空 + 重建现行任职 + 留空沿用原部门岗位）、身份门禁补充用例（重新启用后旧会话恢复且可再次切换）：通过。
 - [x] 离职名单可见性测试：服务单测（普通成员默认目录不含离职者、`includeDeparted=true` 被拒、管理员可见且状态为 departed）、Agent 工具单测（普通成员经 `organization.list_members` 同样拿不到）、新增 HTTP 契约测试 `tests/integration/organization-member-api.test.ts`（默认目录无离职者 / `?includeDeparted=true` → `403 ACCESS_DENIED` / 管理员 200 含 departed / 非管理员重新启用 403）：通过。
 - [x] 站内通知测试：`tests/unit/task-notifications.test.ts` 9 项（六类触发点收件人与文案、自己操作不通知自己、部门池公开承接无收件人、验收退回原因进正文、标记已读幂等且不覆盖原时间、越权 404、全部已读只清本人、workspace 载荷、CAS 冲突不产生通知、子任务勾选不通知）、`tests/unit/work-notification-agent-tool.test.ts` 2 项（工具 R0/never 只读且属 work-orchestration、只返回本人通知）、PGlite 集成 1 项（同事务落库与 source_event_id 对齐、CAS 冲突不写事件与通知、越权 404、FORCE RLS/审计触发器/策略数）、新增 `tests/integration/task-notification-api.test.ts` 2 项（分派通知只对收件人可见并幂等标记已读/全部已读、越权 404、非法 `limit=0` → 422）：通过。证据边界：PGlite 用例的适配器不包事务（只 `set_config`），它证明的是写入顺序与 CAS 早退（冲突时既不写事件也不写通知）；"异常回滚"由生产 `withTenant`（`sql.begin`）代码保证，未做故障注入验证，已同步 docs/18 与台账口径。
+- [x] 提醒调度测试：`tests/unit/task-reminder-worker.test.ts` 7 项（系统署名、重复扫描幂等、逾期/阻塞升级收件人、无人承接不通知、人工触发按调用人署名、按租户节流与排空、失败不推进节流）与 `tests/integration/task-reminder-scheduler.test.ts` 2 项（系统署名落库与 actor 为空、重复扫描 created=0/deduplicated=1、heartbeat 接受新角色、署名约束拒绝 system 挂真人 ID）：通过；真实库复核首扫 created=2/notificationsCreated=2、再扫 created=0/deduplicated=2，`WORKER_ROLES=task-reminder npm run worker` 常驻写心跳且各次扫描幂等。证据边界：Windows 强杀不触发 Node 信号处理，`drain()` 优雅排空未在本机实测。
 - [x] 真实 dev server 端到端：把用户先前停用的陈屿重新启用（v2→v3、恢复运营中心/运营负责人），可切换身份重新出现 operations、切换返回 200 且会话可访问员工目录、任务可指派人员列表重新包含陈屿。
 - [x] 真实 dev server 端到端：对“今天新入职了一名员工叫张三”Agent 调用 `organization.add_member` 仅凭姓名登记张三（active、v1、部门/岗位/邮箱留空），成员目录与任务可指派人员列表均可查到；skills/tools 路由记录为 `organization-member-directory` / `organization.add_member`。
 - [x] project-to-act 台账：`PROJECT_PROGRESS.md`（E-139～E-144）、`PROJECT_FEATURES.md`（F-091～F-096）、`PROJECT_VERSIONS.md`、`PROJECT_ACCEPTANCE.md` 已同步本批交付；AGENTS.md 已加入“每批次必须写 project-to-act”的长期要求。

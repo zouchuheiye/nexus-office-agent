@@ -23,7 +23,7 @@ import {
 } from "@/src/platform/workers/postgres-work-repositories";
 
 export type WorkCycleResult = {
-  role: "inbox" | "agent" | "outbox" | "pi-runner" | "pi-change-delivery";
+  role: "inbox" | "agent" | "outbox" | "pi-runner" | "pi-change-delivery" | "task-reminder";
   status: "idle" | "running" | "succeeded" | "retry_scheduled" | "failed" | "unknown" | "dead_letter" | "lease_lost";
   workId?: string;
 };

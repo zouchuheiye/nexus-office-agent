@@ -3,7 +3,7 @@ import type { UnifiedEvent } from "@/src/modules/events/domain/event-envelope";
 import type { AgentRiskLevel } from "@/src/modules/agent/domain/agent-run";
 import type { Channel } from "@/src/platform/context/request-context";
 
-export type WorkerRole = "inbox" | "agent" | "outbox" | "pi-runner" | "pi-change-delivery";
+export type WorkerRole = "inbox" | "agent" | "outbox" | "pi-runner" | "pi-change-delivery" | "task-reminder";
 
 export type LeaseRequest = {
   workerId: string;

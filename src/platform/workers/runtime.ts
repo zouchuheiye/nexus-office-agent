@@ -6,6 +6,9 @@ import { AgentChannelActionHandler } from "@/src/modules/integration/application
 import { createIdentityConnectorRegistry, PostgresChannelActorContextResolver } from "@/src/modules/integration/infrastructure/postgres-identity-control-plane";
 import { getManagementLoopService } from "@/src/modules/management-loop/runtime";
 import { getTaskCommandService } from "@/src/modules/task-command/runtime";
+import { DEFAULT_TASK_REMINDER_OPTIONS, TaskReminderWorker } from "@/src/modules/task-command/application/reminder-worker";
+import { TaskCommandService } from "@/src/modules/task-command/application/service";
+import { PostgresTaskCommandRepository } from "@/src/modules/task-command/infrastructure/postgres-repository";
 import { ManagementChannelActionHandler } from "@/src/modules/management-intelligence/application/channel-action-handler";
 import { createManagementIntelligenceService } from "@/src/modules/management-intelligence/runtime";
 import { createPostgresDatabase } from "@/src/platform/database/postgres";
@@ -36,7 +39,7 @@ import type { WorkerRole } from "@/src/platform/workers/contracts";
 
 function workerRoles(value = process.env.WORKER_ROLES ?? "inbox,agent,outbox"): WorkerRole[] {
   const roles = [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
-  if (roles.some((role) => role !== "inbox" && role !== "agent" && role !== "outbox" && role !== "pi-change-delivery")) {
+  if (roles.some((role) => role !== "inbox" && role !== "agent" && role !== "outbox" && role !== "pi-change-delivery" && role !== "task-reminder")) {
     if (roles.includes("pi-runner")) throw new Error("PI_RUNNER_REQUIRES_DEDICATED_ENTRYPOINT");
     throw new Error("WORKER_ROLE_INVALID");
   }
@@ -101,6 +104,16 @@ export function createDurableWorkerRuntime() {
       positiveInteger(process.env.PI_CHANGE_DELIVERY_LEASE_MS, 60_000),
     );
     workers.set("pi-change-delivery", new PiChangeDeliveryOutboxWorker(changeDelivery, positiveInteger(process.env.PI_CHANGE_DELIVERY_WORKER_BATCH, 1), gateways.enabled));
+  }
+  if (roles.includes("task-reminder")) {
+    // 复用同一份数据库连接构造服务，避免常驻进程额外开池。
+    const reminders = new TaskCommandService(new PostgresTaskCommandRepository(database));
+    workers.set("task-reminder", new TaskReminderWorker(reminders, {
+      intervalMs: positiveInteger(process.env.TASK_REMINDER_INTERVAL_MS, DEFAULT_TASK_REMINDER_OPTIONS.intervalMs),
+      dueSoonHours: positiveInteger(process.env.TASK_REMINDER_DUE_SOON_HOURS, DEFAULT_TASK_REMINDER_OPTIONS.dueSoonHours),
+      blockedEscalationHours: positiveInteger(process.env.TASK_REMINDER_BLOCKED_HOURS, DEFAULT_TASK_REMINDER_OPTIONS.blockedEscalationHours),
+      timeoutMs: positiveInteger(process.env.TASK_REMINDER_TIMEOUT_MS, DEFAULT_TASK_REMINDER_OPTIONS.timeoutMs),
+    }));
   }
   const enabled = roles.map((role) => workers.get(role)!);
   const supervisor = new WorkerSupervisor(

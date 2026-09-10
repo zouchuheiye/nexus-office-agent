@@ -28,6 +28,8 @@ export interface TaskCommandRepository {
   initiateHandoff(handoff: WorkTaskHandoff, event: Omit<WorkTaskEvent, "sequence">, notifications?: WorkTaskNotification[]): Promise<{ handoff: WorkTaskHandoff; created: boolean }>;
   respondToHandoff(input: { current: WorkTaskHandoff; next: WorkTaskHandoff; currentPackage: WorkPackage; nextPackage?: WorkPackage; expectedVersion: number; event: Omit<WorkTaskEvent, "sequence">; notifications?: WorkTaskNotification[] }): Promise<boolean>;
   listNotifications(tenantId: string, recipientId: string, options: { unreadOnly?: boolean; limit: number }): Promise<WorkTaskNotification[]>;
+  /** 后台提醒扫描的批量写入：按 (tenant_id, recipient_id, source_event_id) 幂等，返回真正新增的条数。 */
+  saveNotifications(notifications: WorkTaskNotification[]): Promise<number>;
   countUnreadNotifications(tenantId: string, recipientId: string): Promise<number>;
   getNotification(tenantId: string, id: string): Promise<WorkTaskNotification | null>;
   markNotificationRead(tenantId: string, id: string, recipientId: string, readAt: string): Promise<boolean>;

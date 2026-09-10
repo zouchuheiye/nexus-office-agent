@@ -208,6 +208,17 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
     return true;
   }
 
+  /** 后台提醒扫描的批量写入；命中同一 (tenant, recipient, sourceEventId) 时视为已存在。 */
+  async saveNotifications(notifications: WorkTaskNotification[]) {
+    let saved = 0;
+    for (const item of notifications) {
+      const before = this.notifications.length;
+      this.insertNotification(item);
+      if (this.notifications.length > before) saved += 1;
+    }
+    return saved;
+  }
+
   async listNotifications(tenantId: string, recipientId: string, options: { unreadOnly?: boolean; limit: number }) {
     const limit = Math.min(Math.max(options.limit, 1), 100);
     return structuredClone(this.notifications

@@ -15,7 +15,7 @@ export type PackageSubtask = {
   evidenceRefs: string[]; createdBy: string; createdAt: string; updatedAt: string; version: number;
 };
 export type PoolFeedback = { id: string; messageId: string; content: string; authorId: string; createdAt: string };
-export type PoolMessage = { id: string; poolKey: string; subject: string; content: string; kind: "announcement" | "notice"; authorId: string; createdAt: string; feedback: PoolFeedback[] };
+export type PoolMessage = { id: string; poolKey: string; subject: string; content: string; kind: "announcement" | "notice"; authorType?: "user" | "system"; authorId?: string; source?: "human" | "agent" | "system"; createdAt: string; feedback: PoolFeedback[] };
 export type MessagePool = { key: string; name: string; scope: "company" | "department"; orgUnitId?: string; messages: PoolMessage[] };
 export type TaskHandoff = {
   id: string; packageId: string; fromAssigneeId: string; toAssigneeId: string; note: string;
@@ -45,8 +45,10 @@ export type TimelineEvent = {
 export type WorkspaceNotification = {
   id: string;
   recipientId: string;
-  actorId: string;
-  kind: "task_assigned" | "task_claimed" | "handoff_requested" | "handoff_responded" | "review_requested" | "review_decided";
+  /** system 表示由常驻调度器发出（定时提醒），此时 actorId 为空。 */
+  actorType?: "user" | "system";
+  actorId?: string;
+  kind: "task_assigned" | "task_claimed" | "handoff_requested" | "handoff_responded" | "review_requested" | "review_decided" | "task_due_soon" | "task_overdue" | "task_blocked";
   title: string;
   body: string;
   refType: "work_package" | "work_handoff";

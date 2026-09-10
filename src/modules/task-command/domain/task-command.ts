@@ -286,8 +286,11 @@ export type WorkMessagePool = {
   orgUnitId?: string;
 };
 
-/** P4 站内通知：收件人自己的任务动态（分派/承接/交接/验收），与消息池广播语义分开。 */
-export const WORK_NOTIFICATION_KINDS = ["task_assigned", "task_claimed", "handoff_requested", "handoff_responded", "review_requested", "review_decided"] as const;
+/** P4 站内通知：收件人自己的任务动态（分派/承接/交接/验收 + 定时提醒），与消息池广播语义分开。 */
+export const WORK_NOTIFICATION_KINDS = [
+  "task_assigned", "task_claimed", "handoff_requested", "handoff_responded", "review_requested", "review_decided",
+  "task_due_soon", "task_overdue", "task_blocked",
+] as const;
 
 export type WorkNotificationKind = (typeof WORK_NOTIFICATION_KINDS)[number];
 
@@ -295,7 +298,9 @@ export type WorkTaskNotification = {
   id: string;
   tenantId: string;
   recipientId: string;
-  actorId: string;
+  /** system 署名表示由常驻调度器发出，此时 actorId 为空（不冒名任何同事）。 */
+  actorType: "user" | "system";
+  actorId?: string;
   kind: WorkNotificationKind;
   title: string;
   body: string;
@@ -316,8 +321,10 @@ export type WorkPoolMessage = {
   subject: string;
   content: string;
   kind: "announcement" | "notice";
-  authorId: string;
-  source: "human" | "agent";
+  /** system 署名表示由常驻调度器发出，此时 authorId 为空。 */
+  authorType: "user" | "system";
+  authorId?: string;
+  source: "human" | "agent" | "system";
   sourceRunId?: string;
   createdAt: string;
 };
@@ -340,7 +347,9 @@ export type WorkMessageEvent = {
   orgUnitId?: string;
   messageId: string;
   eventType: "message_published" | "feedback_published";
-  actorId: string;
+  /** system 署名表示常驻调度器发布，此时 actorId 为空。 */
+  actorType: "user" | "system";
+  actorId?: string;
   occurredAt: string;
 };
 
@@ -519,8 +528,10 @@ export function deterministicUuid(name: string): string {
   const hex = digest.toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
-export function createPoolMessage(input: Omit<WorkPoolMessage, "id" | "createdAt">, now = new Date()): WorkPoolMessage {
-  return { ...input, id: randomUUID(), createdAt: now.toISOString() };
+/** 消息池消息：system 署名（常驻调度器）不带 authorId；历史数据默认 human 署名。 */
+export function createPoolMessage(input: Omit<WorkPoolMessage, "id" | "createdAt" | "authorType"> & { authorType?: WorkPoolMessage["authorType"] }, now = new Date()): WorkPoolMessage {
+  const authorType = input.authorType ?? "user";
+  return { ...input, authorType, authorId: authorType === "system" ? undefined : input.authorId, id: randomUUID(), createdAt: now.toISOString() };
 }
 
 /**
@@ -528,7 +539,14 @@ export function createPoolMessage(input: Omit<WorkPoolMessage, "id" | "createdAt
  * 调用方负责跳过"自己操作自己"的情况（收件人等于操作人时不生成）。
  */
 export function createWorkTaskNotification(input: Omit<WorkTaskNotification, "id" | "createdAt" | "readAt">, now = new Date()): WorkTaskNotification {
-  return { ...input, title: input.title.trim(), body: input.body.trim(), id: randomUUID(), createdAt: now.toISOString() };
+  return {
+    ...input,
+    title: input.title.trim(),
+    body: input.body.trim(),
+    actorId: input.actorType === "system" ? undefined : input.actorId,
+    id: randomUUID(),
+    createdAt: now.toISOString(),
+  };
 }
 
 export function createPoolFeedback(input: Omit<WorkPoolFeedback, "id" | "createdAt">, now = new Date()): WorkPoolFeedback {

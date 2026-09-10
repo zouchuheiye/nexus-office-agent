@@ -254,7 +254,7 @@ Agent 回复必须区分：
 `0.12.0-durable-runtime` 至少提供四种同源制品：
 
 - Web/API Runner。
-- Inbox/Agent/Outbox Worker Runner，可按角色独立部署和伸缩。
+- Inbox/Agent/Outbox Worker Runner，可按角色独立部署和伸缩；`WORKER_ROLES` 还支持 `pi-change-delivery`（变更交付 Outbox）与 `task-reminder`（任务临期/逾期/阻塞提醒扫描，见 [work-command-center](./18-work-command-center.md) §4.4）。未列出的角色值一律 `WORKER_ROLE_INVALID` 失败关闭；`pi-runner` 必须使用专用入口。
 - Migration Runner。
 - Backup/Restore Operations Runner。
 
