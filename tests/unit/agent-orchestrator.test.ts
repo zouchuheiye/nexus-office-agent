@@ -40,6 +40,42 @@ function riskCallingModel(title = "客户验收人尚未确认"): ModelGateway {
 }
 
 describe("Agent orchestrator", () => {
+  it("P5: 逐步上报真实阶段，并且回调抛错不影响运行结果", async () => {
+    const { orchestrator } = fixture();
+    const stages: string[] = [];
+    const run = await orchestrator.createRun(createDevelopmentRequestContext("agent-stage"), { message: "分析当前项目风险", contextRefs: [`project:${DEMO_PROJECT_ID}`] }, {
+      onStage: (event) => {
+        stages.push(event.stage);
+        expect(event.label.length).toBeGreaterThan(0);
+        expect(event.at).toBeTruthy();
+        // 文案不得暴露 R2/R3 之类的内部等级
+        expect(event.label).not.toMatch(/\bR[0-4]\b/);
+      },
+    });
+    expect(run.status).toBe("succeeded");
+    expect(stages[0]).toBe("classification");
+    expect(stages).toContain("context");
+    expect(stages).toContain("thinking");
+    expect(stages[stages.length - 1]).toBe("answer");
+
+    // 进度上报是旁路：回调抛错不能让运行失败
+    const tolerant = await orchestrator.createRun(createDevelopmentRequestContext("agent-stage-throws"), { message: "分析当前项目风险" }, {
+      onStage: () => { throw new Error("CLIENT_DISCONNECTED"); },
+    });
+    expect(tolerant.status).toBe("succeeded");
+  });
+
+  it("P5: 工具阶段上报工具与其所属 Skill，且标注开始/结束", async () => {
+    const { orchestrator } = fixture(riskCallingModel());
+    const toolStages: Array<{ phase?: string; toolId?: string; skillTitle?: string }> = [];
+    await orchestrator.createRun(createDevelopmentRequestContext("agent-stage-tool"), { message: "请登记这一项风险" }, {
+      onStage: (event) => { if (event.stage === "tool") toolStages.push({ phase: event.phase, toolId: event.toolId, skillTitle: event.skillTitle }); },
+    });
+    expect(toolStages.some((item) => item.phase === "started" && item.toolId === "management.create_risk")).toBe(true);
+    expect(toolStages.some((item) => item.phase === "finished" && item.toolId === "management.create_risk")).toBe(true);
+    expect(toolStages.find((item) => item.skillTitle)?.skillTitle).toBeTruthy();
+  });
+
   it("answers with permission-filtered citations and model usage", async () => {
     const { orchestrator } = fixture();
     const run = await orchestrator.createRun(createDevelopmentRequestContext("agent-answer"), {

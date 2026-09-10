@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z, ZodError } from "zod";
 import type { ModelGateway, ModelMessage, ModelResponse, ModelToolCall } from "@/src/modules/agent/domain/model-gateway";
 import { createAgentRun, sha256, type AgentRun } from "@/src/modules/agent/domain/agent-run";
+import { createAgentStage, type AgentStageEvent } from "@/src/modules/agent/domain/agent-stage";
 import { approveProposal, createProposal, proposalInputDigest, supersedeProposal, type AgentProposal } from "@/src/modules/agent/domain/proposal";
 import { assertToolPolicy, modelToolName, type AgentTool, type ToolRegistry } from "@/src/modules/agent/domain/tool";
 import { createDefaultSkillRegistry, type SkillRegistry } from "@/src/modules/agent/domain/skill";
@@ -128,6 +129,11 @@ function parseFinalAnswer(content: string, actualSkills: Iterable<string>) {
   }
 }
 
+export type AgentRunHooks = {
+  /** 真实阶段进度（P5）：服务端走到哪一步就报哪一步，回调异常不影响运行。 */
+  onStage?: (event: AgentStageEvent) => void;
+};
+
 export class AgentOrchestrator {
   constructor(
     private readonly store: AgentStore,
@@ -139,7 +145,12 @@ export class AgentOrchestrator {
     private readonly memory?: AgentMemoryService,
   ) {}
 
-  async createRun(context: RequestContext, input: { message: string; contextRefs?: string[]; clientRequestId?: string; conversationId?: string }): Promise<AgentRun> {
+  async createRun(context: RequestContext, input: { message: string; contextRefs?: string[]; clientRequestId?: string; conversationId?: string }, hooks?: AgentRunHooks): Promise<AgentRun> {
+    // 阶段进度是"尽力而为"的旁路：客户端断开或回调抛错都不能影响本次运行本身。
+    const emit = (stage: Omit<AgentStageEvent, "at">) => {
+      if (!hooks?.onStage) return;
+      try { hooks.onStage(createAgentStage(stage)); } catch { /* 进度上报失败不影响业务 */ }
+    };
     if (input.clientRequestId) {
       const existing = await this.store.getRunByClientRequest(context.tenantId, context.actorId, input.clientRequestId);
       if (existing) return existing;
@@ -158,6 +169,7 @@ export class AgentOrchestrator {
     });
     run = { ...run, agentProfile: "enterprise-primary-agent", profileVersion: 2, status: "running", startedAt: new Date().toISOString() };
     await this.store.saveRun(run);
+    emit({ stage: "classification", label: "正在理解你的要求…" });
     if (conversationId && this.taskCommand) await this.taskCommand.appendMessage(context, {
       conversationId, role: "user", content: persistedMessage, runId: run.id, route: { skills: [], tools: [] }, citations: [],
     });
@@ -181,6 +193,7 @@ export class AgentOrchestrator {
     }
 
     try {
+      emit({ stage: "context", label: "正在检索你有权限查看的事实…" });
       const contextPackage = await this.contexts.build(context, run.contextRefs, { conversationId, message: input.message, runId: run.id });
       await this.store.saveCitations(context.tenantId, run.id, contextPackage.citations);
       const availableTools = filterToolsByIntent(this.tools.available(context), input.message);
@@ -207,6 +220,11 @@ export class AgentOrchestrator {
 
       try {
         for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+          emit({
+            stage: "thinking",
+            round: round + 1,
+            label: round === 0 ? "正在梳理下一步…" : "正在根据工具结果继续推进…",
+          });
           const response = await measureOperation("agent.model.complete", { classification: outboundClassification }, () => this.model.complete({
             tenantId: context.tenantId, traceId: context.traceId, dataClassification: outboundClassification, messages,
             tools: availableTools.map((tool) => ({ name: modelToolName(tool.id), description: `${tool.description} 所属 Skill：${tool.skillId}。`, inputSchema: tool.inputJsonSchema })),
@@ -221,13 +239,20 @@ export class AgentOrchestrator {
           if (callCount > MAX_TOOL_CALLS) throw new Error("AGENT_TOOL_LOOP_LIMIT");
           messages.push({ role: "assistant", content: response.content, toolCalls: response.toolCalls });
           for (const call of response.toolCalls) {
+            const intent = this.tools.getByModelName(call.name);
+            const skillTitle = this.skills.forTool(intent.id)?.title;
+            const step = usedTools.length + 1;
+            emit({ stage: "tool", phase: "started", toolId: intent.id, skillTitle, label: `正在执行：${skillTitle ?? intent.id}（第 ${step} 步）` });
             const outcome = await this.handleToolCall(context, run, contextPackage.expectedVersions, call, conversationId);
             if (outcome.inputError) {
               // 入参不合法：把问题回灌给模型，让它按 schema 重新调用（不计入已执行工具）。
               toolInputRejections.push(outcome.inputError);
+              emit({ stage: "tool", phase: "finished", toolId: intent.id, skillTitle, label: `参数不完整，正在按规则重试：${skillTitle ?? intent.id}` });
               messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: JSON.stringify({ error: "TOOL_INPUT_INVALID", message: outcome.inputError }) });
               continue;
             }
+            const doneSkillTitle = this.skills.forTool(outcome.tool.id)?.title;
+            emit({ stage: "tool", phase: "finished", toolId: outcome.tool.id, skillTitle: doneSkillTitle, label: `已完成：${doneSkillTitle ?? outcome.tool.id}（第 ${step} 步）` });
             usedTools.push(outcome.tool.id); usedSkills.add(outcome.tool.skillId);
             if (outcome.proposal) {
               run = {
@@ -265,6 +290,7 @@ export class AgentOrchestrator {
         run = { ...run, usage: { ...usage, degraded: true } };
       }
 
+      emit({ stage: "answer", label: "正在整理回答…" });
       const parsed = parseFinalAnswer(lastResponse?.content || "模型没有返回有效内容。", [...usedSkills]);
       run = {
         ...run,

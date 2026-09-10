@@ -21,6 +21,40 @@ function getRequest(url: string) {
 }
 
 describe("Agent HTTP API", () => {
+  it("P5: 流式通道先推真实阶段，最后推结果；事件顺序与文案可断言", async () => {
+    const response = await createRun(new Request("http://localhost/api/v1/agent/runs?stream=1", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "text/event-stream", "x-trace-id": "agent-stream-test" },
+      body: JSON.stringify({ message: "分析当前项目风险", clientRequestId: "agent-api-stream-001" }),
+    }));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const text = await new Response(response.body).text();
+    const frames = text.split("\n\n").filter(Boolean).map((frame) => {
+      const lines = frame.split("\n");
+      return { event: lines.find((line) => line.startsWith("event: "))?.slice(7).trim(), data: JSON.parse(lines.find((line) => line.startsWith("data: "))?.slice(6) ?? "{}") as Record<string, unknown> };
+    });
+    expect(frames[0].event).toBe("ready");
+    const stages = frames.filter((frame) => frame.event === "stage").map((frame) => frame.data.stage);
+    expect(stages[0]).toBe("classification");
+    expect(stages).toEqual(expect.arrayContaining(["context", "thinking", "answer"]));
+    // 阶段文案是人话，不暴露内部等级
+    for (const frame of frames.filter((item) => item.event === "stage")) {
+      expect(String(frame.data.label)).not.toMatch(/\bR[0-4]\b/);
+      expect(String(frame.data.label).length).toBeGreaterThan(0);
+    }
+    const final = frames.find((frame) => frame.event === "final");
+    expect(final).toBeDefined();
+    expect((final!.data.run as { output: { kind: string } }).output.kind).toBe("answer");
+  });
+
+  it("P5: 非流式请求保持原有 JSON 契约不变", async () => {
+    const response = await createRun(request("http://localhost/api/v1/agent/runs", { message: "分析当前项目风险", clientRequestId: "agent-api-json-001" }));
+    expect(response.status).toBe(201);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect((await response.json()).data.run.status).toBe("succeeded");
+  });
+
   it("returns the same run for a repeated client request", async () => {
     const input = { message: "分析当前项目风险", clientRequestId: "agent-api-idempotency-001" };
     const first = await createRun(request("http://localhost/api/v1/agent/runs", input));

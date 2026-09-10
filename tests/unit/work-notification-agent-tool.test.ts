@@ -38,6 +38,18 @@ describe("P4 站内通知 Agent 工具", () => {
     expect(registry.available(outsider()).map((item) => item.id)).not.toContain(TOOL_ID);
   });
 
+  it("每个任务协同工具都能解析到所属 Skill（阶段进度展示人话标签的前提）", () => {
+    const { registry } = setup();
+    const skills = createDefaultSkillRegistry();
+    const taskToolIds = registry.list().map((item) => item.id).filter((id) => id.startsWith("work.") || id.startsWith("communication."));
+    expect(taskToolIds.length).toBeGreaterThan(10);
+    for (const id of taskToolIds) {
+      const skill = skills.forTool(id);
+      expect(skill, `${id} 未登记到任何 Skill 的 toolIds`).toBeDefined();
+      expect(skill?.title.length).toBeGreaterThan(0);
+    }
+  });
+
   it("只返回调用者自己的通知，并支持 unreadOnly 过滤", async () => {
     const { service, registry } = setup();
     const owner = manager();

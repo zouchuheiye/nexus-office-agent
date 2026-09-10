@@ -496,6 +496,18 @@ kbd { display: inline-flex; align-items: center; gap: 2px; padding: 3px 5px; col
 .notification-card footer button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; color: var(--ink-soft); background: transparent; border: 1px solid var(--rule-subtle); border-radius: 999px; cursor: pointer; font-size: 10px; }
 .notification-card footer button.notification-open { color: var(--cinnabar); border-color: var(--cinnabar); }
 .notification-card footer button:hover { background: var(--paper-muted); }
+/* P5：真实阶段进度与失败重试 */
+.command-retry { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.command-retry button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; color: var(--paper); background: var(--ink); border: 1px solid var(--ink); border-radius: 999px; cursor: pointer; font-size: 10.5px; }
+.command-retry button:hover { opacity: .88; }
+.command-retry small { color: var(--ink-faint); font-size: 9px; }
+.command-thinking { display: flex; align-items: center; gap: 6px; }
+.command-thinking span { color: var(--ink-soft); font-size: 11px; }
+.command-empty-guide { display: grid; gap: 6px; margin-top: 10px; padding: 12px 14px; background: var(--paper-muted); border: 1px dashed var(--rule); border-radius: var(--radius-small); }
+.command-empty-guide strong { font-size: 11.5px; }
+.command-empty-guide p { margin: 0; color: var(--ink-soft); font-size: 10.5px; line-height: 1.6; }
+.command-empty-guide button { justify-self: start; padding: 4px 9px; color: var(--ink-soft); background: var(--paper-raised); border: 1px solid var(--rule-subtle); border-radius: 999px; cursor: pointer; font-size: 10px; text-align: left; }
+.command-empty-guide button:hover { border-color: var(--ink-soft); color: var(--ink); }
 .mobile-menu { display: none; }
 
 .content-canvas { padding: 30px clamp(22px, 3.2vw, 48px) 56px; }

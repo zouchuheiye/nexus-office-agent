@@ -42,7 +42,16 @@ type DisplayMessage = {
   routing?: { skills: string[]; tools: string[] };
   proposal?: { id: string; proposalHash: string; preview: string; riskLevel: number; expiresAt: string; status: string };
   job?: { id: string; status: "queued" | "executing" | "retry_scheduled" | "succeeded" | "failed" | "unknown" | "dead_letter" | "cancelled" | "compensated"; errorCode?: string; unknownReason?: string };
+  /** P5：失败提示带原始请求内容，便于一键重试。 */
+  failed?: boolean;
+  retryOf?: string;
 };
+
+/** 把"还有几分钟有效"说成人话，而不是让用户对着绝对时间自己算。 */
+function proposalMinutesLeft(expiresAt: string) {
+  const minutes = Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 60_000));
+  return minutes;
+}
 
 const statusCopy: Record<Task["status"], string> = {
   published: "待承接", assigned: "已分派", claimed: "已承接", in_progress: "进行中", blocked: "阻塞", in_review: "待验收", completed: "已完成", cancelled: "已取消",
@@ -108,6 +117,8 @@ export function WorkCommandCenter({
   onHydrate,
   onNotice,
   notificationRequest,
+  agentStage,
+  onRetryMessage,
 }: {
   messages: DisplayMessage[];
   query: string;
@@ -121,6 +132,10 @@ export function WorkCommandCenter({
   onNotice: (message: string) => void;
   /** P4：外部（侧栏铃铛）递增该计数即可把右栏切到通知页签。 */
   notificationRequest?: number;
+  /** P5：服务端回报的真实阶段文案（运行中显示，不做假进度）。 */
+  agentStage?: string;
+  /** P5：一键重试失败的那条请求。 */
+  onRetryMessage?: (message: string) => void;
 }) {
   const { workspace, loading, error, load: loadWorkspace } = useWorkspace();
   const [taskMode, setTaskMode] = useState<"mine" | "available" | "published" | "handoffs">("mine");
@@ -485,7 +500,11 @@ export function WorkCommandCenter({
         </div>
 
         <div className="command-conversation" aria-live="polite">
-          {!messages.length ? <div className="command-welcome"><h1>有什么需要处理？</h1><p>直接说就可以。审批、项目、会议、知识、经营分析和任务都可以从这里开始。</p></div> : null}
+          {!messages.length ? <div className="command-welcome"><h1>有什么需要处理？</h1><p>直接说就可以。审批、项目、会议、知识、经营分析和任务都可以从这里开始。</p><div className="command-empty-guide"><strong>不知道从哪句话开始？试试这些</strong><p>点一句填进输入框，再按需改人名和时间即可。</p>{[
+            `把「华东环境巡检」交给${workspace?.people[0]?.displayName ?? "某位同事"}，本周五前完成`,
+            "今天新入职了一名员工叫李小明，先登记到名册里",
+            "以「智能客服 2.0 上线」为主题，拆成发布、联调和验收三个任务包",
+          ].map((example) => <button type="button" key={example} onClick={() => onQueryChange(example)}>{example}</button>)}</div></div> : null}
           {messages.map((message, index) => <article key={`${message.runId ?? "message"}-${index}`} className={`command-message is-${message.role}`}>
             {message.role === "assistant" ? <span className="command-message-avatar"><Bot size={16} /></span> : null}
             <div className="command-message-body">
@@ -493,11 +512,12 @@ export function WorkCommandCenter({
               <p>{message.content}</p>
               {message.routing?.tools.length ? <details className="route-proof"><summary>已使用 {message.routing.tools.length} 项办公能力</summary><span>{message.routing.tools.join(" · ")}</span></details> : null}
               {message.citations?.length ? <div className="command-citations"><span><ShieldCheck size={12} />核验依据</span>{message.citations.slice(0, 5).map((citation, citationIndex) => <details key={citation.id}><summary><b>[{citationIndex + 1}]</b>{citation.label}</summary><small>{citation.excerpt}</small></details>)}</div> : null}
-              {message.proposal ? <div className="command-proposal"><div><span>R{message.proposal.riskLevel} · 人工确认</span><b>{new Date(message.proposal.expiresAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 前有效</b></div><strong>{message.proposal.preview}</strong><footer><button onClick={() => onAmendProposal(message.proposal!)}>修正草稿<ArrowRight size={13} /></button><button disabled={confirmingProposal === message.proposal.id} onClick={() => onConfirmProposal(message.proposal!)}>{confirmingProposal === message.proposal.id ? "正在校验…" : "确认并执行"}<ArrowRight size={13} /></button></footer></div> : null}
+              {message.proposal ? <div className="command-proposal"><div><span>需要你确认</span><b>请在 {proposalMinutesLeft(message.proposal.expiresAt)} 分钟内确认，过期需重新发起</b></div><strong>{message.proposal.preview}</strong><footer><button onClick={() => onAmendProposal(message.proposal!)}>修正草稿<ArrowRight size={13} /></button><button disabled={confirmingProposal === message.proposal.id} onClick={() => onConfirmProposal(message.proposal!)}>{confirmingProposal === message.proposal.id ? "正在校验…" : "确认并执行"}<ArrowRight size={13} /></button></footer></div> : null}
               {message.job ? <div className="command-job"><Radio size={13} /><span>{message.job.status}</span><code>{message.job.id.slice(0, 8)}</code></div> : null}
+              {message.failed && message.retryOf ? <div className="command-retry"><button type="button" onClick={() => onRetryMessage?.(message.retryOf!)}>重试这条请求<RotateCcw size={13} /></button><small>原始内容已保留，不需要重新输入</small></div> : null}
             </div>
           </article>)}
-          {isThinking ? <article className="command-message is-assistant"><span className="command-message-avatar"><Bot size={16} /></span><div className="command-thinking"><i /><i /><i /><span>正在处理</span></div></article> : null}
+          {isThinking ? <article className="command-message is-assistant"><span className="command-message-avatar"><Bot size={16} /></span><div className="command-thinking"><i /><i /><i /><span>{agentStage || "正在处理"}</span></div></article> : null}
           <div ref={conversationEnd} />
         </div>
 

@@ -121,6 +121,9 @@ type AgentMessage = {
   proposal?: AgentProposal;
   job?: AgentJob;
   routing?: { skills: string[]; tools: string[] };
+  /** P5：这条回复是失败提示，可一键重试（retryOf 保存原始请求内容）。 */
+  failed?: boolean;
+  retryOf?: string;
 };
 type PrimaryConversationWorkspace = {
   conversation: { id: string };
@@ -199,6 +202,56 @@ async function readApi<T>(url: string, init?: RequestInit): Promise<T> {
   return payload.data as T;
 }
 
+type AgentStreamOutcome = {
+  run: { id: string; output?: { content?: string; citations?: unknown; routing?: unknown; proposalId?: string } };
+  proposal?: unknown;
+};
+
+/**
+ * P5：以 SSE 读取 Agent 运行，边跑边回报服务端的真实阶段。
+ * 服务端失败会用 error 事件表达（此时响应头已发出），因此这里也要处理 error 事件；
+ * 若环境不支持流式读取，则退回普通 JSON 请求，保证功能不因体验优化而丢失。
+ */
+async function runAgentStream(
+  body: Record<string, unknown>,
+  onStage: (label: string) => void,
+): Promise<AgentStreamOutcome> {
+  const response = await fetch("/api/v1/agent/runs?stream=1", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok || !response.body) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error?.message || "Agent 请求失败");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let outcome: AgentStreamOutcome | undefined;
+  let failure: Error | undefined;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const eventLine = frame.split("\n").find((line) => line.startsWith("event: "));
+      const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
+      if (!eventLine || !dataLine) continue;
+      const event = eventLine.slice("event: ".length).trim();
+      const data = JSON.parse(dataLine.slice("data: ".length)) as Record<string, unknown>;
+      if (event === "stage") onStage(String(data.label ?? ""));
+      else if (event === "final") outcome = data as unknown as AgentStreamOutcome;
+      else if (event === "error") failure = new Error(String(data.message ?? "Agent 请求失败"));
+    }
+  }
+  if (failure) throw failure;
+  if (!outcome) throw new Error("连接中断，未收到 Agent 结果；可以直接重试。");
+  return outcome;
+}
+
 export function OfficeShell() {
   const [active, setActive] = useState("command");
   const desktopViewport = useSyncExternalStore(subscribeToDesktopViewport, getDesktopViewport, getServerDesktopViewport);
@@ -210,6 +263,7 @@ export function OfficeShell() {
   const [query, setQuery] = useState("");
   const [primaryConversationId, setPrimaryConversationId] = useState("");
   const [isThinking, setIsThinking] = useState(false);
+  const [agentStage, setAgentStage] = useState("");
   const [confirmingProposal, setConfirmingProposal] = useState("");
   const [notice, setNotice] = useState("");
   const [amendDraftOpen, setAmendDraftOpen] = useState(false);
@@ -370,37 +424,54 @@ export function OfficeShell() {
     }
   }
 
-  async function askAgent(event: FormEvent) {
-    event.preventDefault();
-    const message = query.trim();
-    if (!message || isThinking) return;
+  async function sendAgentMessage(message: string) {
     if (!primaryConversationId) { showNotice("主工作对话仍在建立，请稍后再发送"); return; }
     setMessages((current) => [...current, { role: "user", content: message }]);
-    setQuery("");
     setIsThinking(true);
+    setAgentStage("正在理解你的要求…");
     try {
-      const response = await fetch("/api/v1/agent/runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, conversationId: primaryConversationId, contextRefs: selectedProjectId ? [`project:${selectedProjectId}`] : [], clientRequestId: crypto.randomUUID() }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message || "Agent 请求失败");
-      const run = payload.data.run;
+      const outcome = await runAgentStream({
+        message,
+        conversationId: primaryConversationId,
+        contextRefs: selectedProjectId ? [`project:${selectedProjectId}`] : [],
+        clientRequestId: crypto.randomUUID(),
+      }, setAgentStage);
+      const run = outcome.run;
       setMessages((current) => [...current, {
         role: "assistant",
         content: run.output?.content || "模型没有返回可展示内容。",
         runId: run.id,
-        citations: run.output?.citations,
-        proposal: payload.data.proposal,
-        routing: run.output?.routing,
+        citations: run.output?.citations as AgentMessage["citations"],
+        proposal: outcome.proposal as AgentMessage["proposal"],
+        routing: run.output?.routing as AgentMessage["routing"],
       }]);
       window.dispatchEvent(new Event("nexus:task-command-changed"));
     } catch (error) {
-      setMessages((current) => [...current, { role: "assistant", content: error instanceof Error ? error.message : "连接 Agent 失败，请稍后重试。" }]);
+      // P5：失败不再要求用户重新打字——把这条消息标成可重试，保留原文。
+      setMessages((current) => [...current, {
+        role: "assistant",
+        content: error instanceof Error ? error.message : "连接 Agent 失败，请稍后重试。",
+        failed: true,
+        retryOf: message,
+      }]);
     } finally {
       setIsThinking(false);
+      setAgentStage("");
     }
+  }
+
+  async function askAgent(event: FormEvent) {
+    event.preventDefault();
+    const message = query.trim();
+    if (!message || isThinking) return;
+    setQuery("");
+    await sendAgentMessage(message);
+  }
+
+  async function retryAgentMessage(message: string) {
+    if (isThinking) return;
+    setMessages((current) => current.filter((item) => !(item.failed && item.retryOf === message)));
+    await sendAgentMessage(message);
   }
 
   async function monitorAgentJob(jobId: string) {
@@ -524,6 +595,8 @@ export function OfficeShell() {
         onHydrate={hydratePrimaryConversation}
         onNotice={showNotice}
         notificationRequest={notificationRequest}
+        agentStage={agentStage}
+        onRetryMessage={(message) => void retryAgentMessage(message)}
       />
     </>,
     coding: () => <PiCodingWorkbench workspaceId={selectedProjectId} onNotice={showNotice} />,

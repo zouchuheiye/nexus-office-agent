@@ -91,6 +91,8 @@ R3 提案（可编辑预览卡）：`GET /agent/proposals/:id` 返回本人可�
 
 `POST /api/v1/agent/runs`
 
+默认返回一次性 JSON（`201`，`{run, proposal}`），供渠道与企业微信等同步调用方使用。带 `?stream=1` 或 `Accept: text/event-stream` 时改为 SSE：先 `ready`，随后按服务端真实进度推送 `stage` 事件（`classification`/`context`/`thinking`/`tool`/`answer`，字段 `label`/`round`/`toolId`/`skillTitle`/`phase`/`at`），最后推 `final`（`{run, proposal}`）；运行中失败（响应头已发出时）用 `error` 事件表达，`code`/`message` 与普通 HTTP 错误映射完全一致。阶段事件只是"走到哪一步"的真实旁路：回调异常或客户端断开都不会影响运行本身与落库结果。
+
 输入包含 message、contextRefs 和 clientRequestId；服务端解析身份与权限。返回 runId 和流式事件地址。
 
 主工作对话调用还包含 `conversationId`，用户消息、Agent 最终答复和实际 Skill/Tool 路由会幂等写回该会话。

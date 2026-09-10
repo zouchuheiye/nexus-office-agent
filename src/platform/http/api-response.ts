@@ -65,27 +65,35 @@ const errorRules: ErrorRule[] = [
   { match: (code) => code.includes("INVALID_TRANSITION") || code.includes("CANNOT_") || code.includes("_REQUIRED") || code.includes("_PENDING") || code.includes("_LOCKED") || code.includes("_CONFLICT") || code.includes("_CHAIN_CHANGED") || code.includes("_NOT_PENDING") || code.includes("_NOT_ACTIVE") || code.includes("_VERSION_MISSING") || code.includes("MIXED_ARTIFACT_REFERENCES"), status: 409, message: "当前业务状态不允许该操作。" },
 ];
 
-export function applicationErrorResponse(error: unknown): NextResponse {
+export type ApplicationErrorDescription = { status: number; code: string; message: string; fields?: Record<string, string[] | undefined> };
+
+/**
+ * 把领域错误映射成对外的状态码与人话文案。
+ * HTTP 响应与 SSE 流（阶段进度）共用同一份映射，避免"同一个失败在两条通道上有两种说法"。
+ */
+export function describeApplicationError(error: unknown): ApplicationErrorDescription {
   if (error instanceof AuthenticationRequiredError) {
-    return NextResponse.json({ error: { code: error.message, message: "请先完成企业身份认证。" } }, { status: 401 });
+    return { status: 401, code: error.message, message: "请先完成企业身份认证。" };
   }
   if (error instanceof AuthorizationSourceUnavailableError) {
-    return NextResponse.json({ error: { code: error.message, message: "企业授权源暂时不可用，写操作已安全关闭。" } }, { status: 503 });
+    return { status: 503, code: error.message, message: "企业授权源暂时不可用，写操作已安全关闭。" };
   }
   if (error instanceof ZodError) {
-    return NextResponse.json(
-      { error: { code: "VALIDATION_FAILED", message: "请求内容不符合约束。", fields: error.flatten().fieldErrors } },
-      { status: 422 },
-    );
+    return { status: 422, code: "VALIDATION_FAILED", message: "请求内容不符合约束。", fields: error.flatten().fieldErrors };
   }
-
   const code = error instanceof Error ? error.message : "INTERNAL_ERROR";
   for (const rule of errorRules) {
-    if (rule.match(code)) {
-      return NextResponse.json({ error: { code: rule.code ?? code, message: rule.message } }, { status: rule.status });
-    }
+    if (rule.match(code)) return { status: rule.status, code: rule.code ?? code, message: rule.message };
   }
-  return NextResponse.json({ error: { code: "INTERNAL_ERROR", message: "服务暂时无法完成请求。" } }, { status: 500 });
+  return { status: 500, code: "INTERNAL_ERROR", message: "服务暂时无法完成请求。" };
+}
+
+export function applicationErrorResponse(error: unknown): NextResponse {
+  const described = describeApplicationError(error);
+  return NextResponse.json(
+    { error: { code: described.code, message: described.message, ...(described.fields ? { fields: described.fields } : {}) } },
+    { status: described.status },
+  );
 }
 
 export async function parseJson(request: Request): Promise<unknown> {
