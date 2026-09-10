@@ -16,6 +16,7 @@ const codes = (list: string[]) => (code: string) => list.includes(code);
 const errorRules: ErrorRule[] = [
   { match: codes(["DEMO_IDENTITY_DISABLED"]), status: 403, message: "当前环境未开启开发身份切换。" },
   { match: codes(["POLICY_DENIED:work_task:review_decision"]), status: 403, code: "ACCESS_DENIED", message: "验收通过/退回是发布人的决定；请由任务发布人在“已发布”中操作，或让 AI 只起草验收意见。" },
+  { match: codes(["POLICY_DENIED:organization_member:admin"]), status: 403, code: "ACCESS_DENIED", message: "已停用/离职成员只有管理员可以查看；成员的停用与重新启用也需要管理员。" },
   { match: codes(["DEMO_IDENTITY_NOT_FOUND"]), status: 404, message: "开发身份不存在或已被禁用。" },
   { match: codes(["DEMO_IDENTITY_INACTIVE"]), status: 403, message: "该成员已停用/离职，不能再进入枢纽 Agent；如需恢复请联系管理员在“组织与人才 · 成员管理”中处理。" },
   { match: codes(["DEMO_IDENTITY_SECRET_MISSING"]), status: 503, message: "开发身份会话签名依赖未配置，系统已安全关闭切换。" },

@@ -30,11 +30,17 @@ export function MemberDirectoryCard({ onNotice }: { onNotice: (message: string) 
 
   const load = useCallback(async () => {
     try {
-      // includeDeparted=true：已停用成员也要列出来，才能重新启用。
-      const response = await fetch("/api/v1/organization/members?includeDeparted=true", { cache: "no-store" });
+      // 先取在职目录（并得知自己是否管理员）；管理员再补取已停用名单——
+      // 已停用/离职属于敏感人事信息，服务端只对管理员返回。
+      const response = await fetch("/api/v1/organization/members", { cache: "no-store" });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message || "成员目录加载失败");
-      setDirectory(payload.data);
+      let data = payload.data as Directory;
+      if (data.canManage) {
+        const withDeparted = await fetch("/api/v1/organization/members?includeDeparted=true", { cache: "no-store" });
+        if (withDeparted.ok) data = (await withDeparted.json()).data as Directory;
+      }
+      setDirectory(data);
       setLoading(false);
     } catch (cause) {
       setLoading(false);

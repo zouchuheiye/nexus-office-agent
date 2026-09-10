@@ -16,7 +16,11 @@ import { ToolRegistry } from "@/src/modules/agent/domain/tool";
  * - 三者都不会修改角色、权限或账号能力（identity-administration 仍不向 Agent 开放）。
  */
 
-const listMembersSchema = z.object({ keyword: z.string().trim().max(80).optional() }).strict();
+const listMembersSchema = z.object({
+  keyword: z.string().trim().max(80).optional(),
+  /** 只有管理员可用：连已停用/离职成员一起返回。 */
+  includeDeparted: z.boolean().optional(),
+}).strict();
 
 const updateMemberToolSchema = z.object({
   memberId: z.uuid(),
@@ -80,15 +84,18 @@ const deactivateMemberJsonSchema = {
 export function registerMemberDirectoryTools(registry: ToolRegistry, service: MemberDirectoryService) {
   registry.register({
     id: "organization.list_members", skillId: "organization-member-directory", version: 1,
-    description: "只读查询当前租户的员工目录（姓名、邮箱、部门、岗位、是否负责人、在职状态、版本号）。回答“公司有哪些人/某人在哪个部门/谁负责哪个部门”以及需要成员 ID 之前必须先调用本工具核验，不得凭记忆编造成员或部门 ID。",
+    description: "只读查询当前租户的员工目录（姓名、邮箱、部门、岗位、是否负责人、在职状态、版本号）。默认只返回在职成员；已停用/离职名单属于敏感人事信息，只有管理员可用 includeDeparted=true 查看。回答“公司有哪些人/某人在哪个部门/谁负责哪个部门”以及需要成员 ID 之前必须先调用本工具核验，不得凭记忆编造成员或部门 ID。",
     requiredPermissions: ["organization_member:read"], riskLevel: 0, confirmationPolicy: "never", sideEffect: "none", timeoutMs: 10_000, maxAttempts: 2,
     allowedChannels: ["web", "feishu", "dingtalk", "wecom"],
-    inputJsonSchema: { type: "object", additionalProperties: false, properties: { keyword: { type: "string", maxLength: 80, description: "可选；按姓名包含匹配过滤" } }, required: [] },
+    inputJsonSchema: { type: "object", additionalProperties: false, properties: {
+      keyword: { type: "string", maxLength: 80, description: "可选；按姓名包含匹配过滤" },
+      includeDeparted: { type: "boolean", description: "可选；只有管理员可用，连已停用/离职成员一起返回" },
+    }, required: [] },
     inputSchema: listMembersSchema,
-    preview(input) { const value = listMembersSchema.parse(input ?? {}); return value.keyword ? `按“${value.keyword}”查询员工目录。` : "读取员工目录。"; },
+    preview(input) { const value = listMembersSchema.parse(input ?? {}); return `${value.keyword ? `按“${value.keyword}”查询员工目录` : "读取员工目录"}${value.includeDeparted ? "（含已停用/离职，需管理员）" : ""}。`; },
     execute(context, input) {
       const value = listMembersSchema.parse(input ?? {});
-      return service.list(context).then((directory) => value.keyword
+      return service.list(context, { includeDeparted: value.includeDeparted === true }).then((directory) => value.keyword
         ? { ...directory, members: directory.members.filter((member) => member.displayName.includes(value.keyword!) || (member.email ?? "").includes(value.keyword!)) }
         : directory);
     },

@@ -30,7 +30,8 @@
 - [x] 停用员工不得再进入枢纽 Agent（用户要求）：新增平台级在职校验（有库查 `users.status/archived_at`，内存夹具用标记）；开发验证身份下停用者的旧会话 401 且不回退为默认管理员、切换列表移除该身份、切换返回 `403 DEMO_IDENTITY_INACTIVE`；停用同一事务收回 `user_roles`/`delegations`/`client_devices`/`external_identities`；软删除仍保留档案与历史审计。
 - [x] 成员重新启用（用户要求）：`GET /organization/members?includeDeparted=true` 列出已停用成员，`POST /organization/members/:id/reactivate` 恢复在职并重建现行任职（部门/岗位/负责人可指定、留空沿用停用前设置，版本 CAS）；成员管理页新增“已停用成员”分区与重新启用对话框；Agent 新增 `organization.reactivate_member`（R2 强制人工确认）；只恢复在职与任职，停用时收回的角色授权/设备/外部身份需另行授予或重新登录（已在界面与文档写明）。
 - [x] project-to-act 台账强制门禁（用户要求"台账要一直写"）：`check.mjs --base` 在"改了代码/产品文件但 `.project-to-act/PROJECT_PROGRESS.md` 未更新"时判 blocked（与 TASK.md 同级）；AGENTS.md 固化"长期要求"章节（PROGRESS 每次必写，FEATURES/VERSIONS/ACCEPTANCE 按适用性同步）；新增门禁测试覆盖拦截与放行。
-- [x] project-to-act 台账同步：本批 P0/P1/P2/P3、成员管理、入职登记、停用进入权、重新启用与台账门禁已补记 `PROJECT_PROGRESS.md`（E-139～E-147）、`PROJECT_FEATURES.md`（F-091～F-099）、`PROJECT_VERSIONS.md` 与 `PROJECT_ACCEPTANCE.md`。
+- [x] 离职名单仅管理员可见（用户要求“只有管理员能看到谁谁谁已离职”）：`includeDeparted=true` 收紧为 `organization_member:admin`，非管理员显式索取返回 `403 ACCESS_DENIED`（不静默降级），默认目录只含在职成员；成员管理卡片仅在 `canManage` 时补取已停用分区；Agent 工具 `organization.list_members` 增加 `includeDeparted` 入参并注明仅管理员可用。
+- [x] project-to-act 台账同步：本批 P0/P1/P2/P3、成员管理、入职登记、停用进入权、重新启用、台账门禁与离职名单可见性已补记 `PROJECT_PROGRESS.md`（E-139～E-148）、`PROJECT_FEATURES.md`（F-091～F-100）、`PROJECT_VERSIONS.md` 与 `PROJECT_ACCEPTANCE.md`。
 - [ ] P3（后续）/P4/P5：子任务证据附件上传、通知链路、体验细节按产品后续排期推进（本任务不替代产品决策）。
 
 ## Invariants
@@ -90,13 +91,14 @@ P01 复核 MVP-FIX 的 P0/P1 快照、P2 双通道交付（提交验收/验收�
 
 - [x] `npm run typecheck`：exit 0。
 - [x] `npm run lint`：exit 0（零警告）。
-- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（132 文件 558 passed / 26 skipped）。
+- [x] 全量测试 `npm test -- --maxWorkers=2`：exit 0（133 文件 561 passed / 26 skipped）。
 - [x] P0 导出过滤单测、P1 身份切换集成测试、P2 验收流转单测（review_decision 边界 + reviewNote 事件审计）、P2 amend/supersede 单元与集成测试：通过。
 - [x] P3 单测（双方可拆且旁观者拒绝、完成/重开与证据门禁、in_review 锁定、workspace 进度暴露、Agent 工具注册与 R3 确认策略、schema 证据格式）与 Postgres 集成测试（落库、CAS 冲突、进度聚合、锁定期）：通过。
 - [x] 成员管理测试：域单测（创建/编辑/停用不变量与岗位归属校验）、服务单测（读门禁与 canManage、管理员增改停、越权拒绝、邮箱唯一、版本 CAS、禁止停用自己）、PGlite 集成（CRUD + RLS + users/memberships 审计 + 有进行中任务禁止停用 + 邮箱大小写不敏感唯一）：通过。
 - [x] 员工入职登记测试：`tests/unit/member-directory-agent-tools.test.ts` 6 项（四个工具注册与技能归属、权限可见性、确认策略、仅姓名登记、岗位归属拒绝、资料补全与版本 CAS、软停用与自停用拦截）通过。
 - [x] 停用进入权测试：`tests/integration/development-identity-gate.test.ts` 2 项（停用后旧会话 401 且不降级为管理员；停用身份从切换列表消失、切换 403 `DEMO_IDENTITY_INACTIVE`、其他在职身份不受影响）与 Postgres 集成“停用收回设备与角色授权”断言通过。
 - [x] 重新启用测试：域/服务单测（仅停用可启用、版本 CAS、岗位归属、部门不存在、includeDeparted 可见性）、Agent 工具单测（R2 确认策略与预览、启用后不可重复启用）、Postgres 集成（状态恢复 + archived_at 清空 + 重建现行任职 + 留空沿用原部门岗位）、身份门禁补充用例（重新启用后旧会话恢复且可再次切换）：通过。
+- [x] 离职名单可见性测试：服务单测（普通成员默认目录不含离职者、`includeDeparted=true` 被拒、管理员可见且状态为 departed）、Agent 工具单测（普通成员经 `organization.list_members` 同样拿不到）、新增 HTTP 契约测试 `tests/integration/organization-member-api.test.ts`（默认目录无离职者 / `?includeDeparted=true` → `403 ACCESS_DENIED` / 管理员 200 含 departed / 非管理员重新启用 403）：通过。
 - [x] 真实 dev server 端到端：把用户先前停用的陈屿重新启用（v2→v3、恢复运营中心/运营负责人），可切换身份重新出现 operations、切换返回 200 且会话可访问员工目录、任务可指派人员列表重新包含陈屿。
 - [x] 真实 dev server 端到端：对“今天新入职了一名员工叫张三”Agent 调用 `organization.add_member` 仅凭姓名登记张三（active、v1、部门/岗位/邮箱留空），成员目录与任务可指派人员列表均可查到；skills/tools 路由记录为 `organization-member-directory` / `organization.add_member`。
 - [x] project-to-act 台账：`PROJECT_PROGRESS.md`（E-139～E-144）、`PROJECT_FEATURES.md`（F-091～F-096）、`PROJECT_VERSIONS.md`、`PROJECT_ACCEPTANCE.md` 已同步本批交付；AGENTS.md 已加入“每批次必须写 project-to-act”的长期要求。

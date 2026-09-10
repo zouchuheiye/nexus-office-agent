@@ -17,8 +17,12 @@ export class MemberDirectoryService {
 
   async list(context: RequestContext, query: MemberDirectoryQuery = {}) {
     requirePermission(context, "organization_member:read");
-    const directory = await this.repository.list(context.tenantId, query);
-    return { ...directory, canManage: hasPermission(context, "organization_member:admin") };
+    const canManage = hasPermission(context, "organization_member:admin");
+    // 已停用/离职名单属于敏感人事事实：只有管理员能查看；
+    // 普通成员只能看到在职同事（不报错也不静默降级，直接拒绝越权请求）。
+    if (query.includeDeparted && !canManage) throw new Error("POLICY_DENIED:organization_member:admin");
+    const directory = await this.repository.list(context.tenantId, { includeDeparted: canManage && query.includeDeparted === true });
+    return { ...directory, canManage };
   }
 
   async createMember(context: RequestContext, input: CreateMemberInput) {

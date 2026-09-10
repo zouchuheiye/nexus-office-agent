@@ -74,6 +74,24 @@ describe("member-directory service", () => {
     await expect(service.list(noPermission())).rejects.toThrow("POLICY_DENIED:organization_member:read");
   });
 
+  it("hides departed members from non-admins while admins can review them", async () => {
+    const { service } = await fixture();
+    const actor = manager();
+    const created = await service.createMember(actor, { displayName: "已离职同事", orgUnitId: DEMO_DELIVERY_ORG_ID });
+    await service.deactivateMember(actor, created.id, { expectedVersion: 1 });
+
+    // 普通成员：既看不到离职名单，也不允许显式索取
+    const readerView = await service.list(member());
+    expect(readerView.members.some(({ id }) => id === created.id)).toBe(false);
+    await expect(service.list(member(), { includeDeparted: true })).rejects.toThrow("POLICY_DENIED:organization_member:admin");
+    // 即使显式传 false 也拿不到离职信息
+    expect((await service.list(member(), { includeDeparted: false })).members.some(({ id }) => id === created.id)).toBe(false);
+
+    // 管理员：可以看到已停用成员及其状态
+    const adminView = await service.list(actor, { includeDeparted: true });
+    expect(adminView.members.find(({ id }) => id === created.id)).toMatchObject({ status: "departed" });
+  });
+
   it("admins can add, move and deactivate a member; email collisions and stale versions are rejected", async () => {
     const { service } = await fixture();
     const actor = manager();

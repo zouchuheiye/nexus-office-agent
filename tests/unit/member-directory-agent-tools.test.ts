@@ -106,6 +106,22 @@ describe("member directory agent tools", () => {
     expect(() => updateTool.execute(manager(), { memberId: created.id, expectedVersion: 2 })).toThrow(/至少需要修改一个字段/);
   });
 
+  it("keeps the departed list admin-only through the agent tool as well", async () => {
+    const { registry } = setup();
+    const addTool = tool(registry, "organization.add_member");
+    const created = await addTool.execute(manager(), { displayName: "离职可见性同事" }) as { id: string; version: number };
+    await tool(registry, "organization.deactivate_member").execute(manager(), { memberId: created.id, expectedVersion: created.version });
+
+    const listTool = tool(registry, "organization.list_members");
+    // 普通成员：默认目录里看不到离职者，显式索取被拒
+    const readerView = await listTool.execute(reader(), {}) as { members: Array<{ id: string }> };
+    expect(readerView.members.some(({ id }) => id === created.id)).toBe(false);
+    await expect(listTool.execute(reader(), { includeDeparted: true })).rejects.toThrow("POLICY_DENIED:organization_member:admin");
+    // 管理员：可以看到并识别其状态
+    const adminView = await listTool.execute(manager(), { includeDeparted: true }) as { members: Array<{ id: string; status: string }> };
+    expect(adminView.members.find(({ id }) => id === created.id)).toMatchObject({ status: "departed" });
+  });
+
   it("keeps departure soft, confirmation-gated and never self-targeted", async () => {
     const { registry } = setup();
     const addTool = tool(registry, "organization.add_member");

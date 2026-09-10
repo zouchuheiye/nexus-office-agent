@@ -91,7 +91,7 @@ flowchart LR
 
 员工名册 Tool（`organization-member-directory` Skill；只维护员工主数据，**不授予角色、权限或账号能力**，`identity-administration` 仍不向 Agent 开放）：
 
-- `organization.list_members`：只读查询当前租户员工目录（姓名/邮箱/部门/岗位/是否负责人/在职状态/版本）；R0，回答人员与部门问题、取 memberId 前必须先核验，不得编造。
+- `organization.list_members`：只读查询当前租户员工目录（姓名/邮箱/部门/岗位/是否负责人/在职状态/版本）；**默认只返回在职成员**，已停用/离职名单只有管理员可用 `includeDeparted=true` 查看（非管理员请求被拒绝）。R0，回答人员与部门问题、取 memberId 前必须先核验，不得编造。
 - `organization.add_member`：登记新员工（入职登记）。**姓名是唯一必填项**，部门/岗位/邮箱可留空并后续补全；未知字段直接留空，不追问、不编造 ID；R1、`organization_member:admin`，写入 users/memberships 并留原子审计。
 - `organization.update_member`：补全或修改员工资料（姓名/邮箱/部门/岗位/是否负责人）；先经 `organization.list_members` 取 memberId 与 `expectedVersion`，按版本 CAS 更新；R1、`organization_member:admin`。
 - `organization.deactivate_member`：停用/离职。软删除（结束现行任职并标记离职，保留历史任务与审计，不存在物理删除）；仍有进行中任务的成员被服务端拒绝；R2、强制人工确认。
@@ -133,7 +133,9 @@ flowchart LR
 
 **停用/离职员工的进入权**：成员被停用后（成员管理软删除），其开发验证身份不再出现在切换列表中，切换接口返回 `403 DEMO_IDENTITY_INACTIVE`；此前签发的会话 Cookie 即使验签通过，也会因“已不是在职员工”被鉴权入口拒绝（`401 AUTHENTICATION_REQUIRED`），并且绝不回退成默认管理员身份（否则等于把“已停用”变成提权）。生产路径同样以 `users.status='active' AND archived_at IS NULL` 判定，非在职主体的授权解析直接返回空。停用是软删除：员工档案、历史任务与审计保留，但登录/授权/设备/外部身份入口一并失效。
 
-**重新启用**：`GET /organization/members?includeDeparted=true` 会把已停用成员一并列出（默认只返回在职成员），管理员在“成员管理”中对其「重新启用」（`POST /organization/members/:id/reactivate`）：恢复在职身份并重建现行任职，部门/岗位/负责人可指定，留空则沿用停用前任职；`users.archived_at` 清空、版本号递增（CAS）。只恢复“能重新上班”——停用期间被收回的角色授权、委托、客户端设备与外部身份不会自动回滚（停用时原到期时间已覆盖，无法精确还原），需管理员重新授予、重新登录或重新绑定；这也避免一次误停用把权限静默恢复。重新启用后，该身份重新出现在切换列表并可再次登录。
+**重新启用**：`GET /organization/members?includeDeparted=true` 会把已停用成员一并列出（该参数**仅管理员可用**；默认只返回在职成员，普通成员既看不到离职名单，显式索取也会被 403 拒绝），管理员在“成员管理”中对其「重新启用」（`POST /organization/members/:id/reactivate`）：恢复在职身份并重建现行任职，部门/岗位/负责人可指定，留空则沿用停用前任职；`users.archived_at` 清空、版本号递增（CAS）。只恢复“能重新上班”——停用期间被收回的角色授权、委托、客户端设备与外部身份不会自动回滚（停用时原到期时间已覆盖，无法精确还原），需管理员重新授予、重新登录或重新绑定；这也避免一次误停用把权限静默恢复。重新启用后，该身份重新出现在切换列表并可再次登录。
+
+**可见性边界**：员工目录本身按 `organization_member:read` 开放（同事之间能看到在职人员，用于协作与分派），但“谁已离职/被停用”属于敏感人事事实：只有 `organization_member:admin` 能看到已停用名单与状态标识，且停用/重新启用也只能由管理员执行。前端只在 `canManage` 为真时才补取并展示“已停用成员”分区，普通成员看到的目录里根本不含离职行。
 
 ## 5. HTTP 契约
 
