@@ -106,7 +106,13 @@ export class PostgresMemberDirectoryRepository implements MemberDirectoryReposit
         [tenantId, userId, expectedVersion],
       );
       if (departed.length !== 1) return "version";
+      // 停用即失去进入权：结束现行任职，并收回其他可能继续放行的入口
+      // （角色授权、委托、客户端设备、外部身份），与组织异动"离职"的收回口径一致。
       await db.query("UPDATE memberships SET ends_at=now(),updated_at=now() WHERE tenant_id=$1 AND user_id=$2 AND ends_at IS NULL", [tenantId, userId]);
+      await db.query("UPDATE user_roles SET expires_at=LEAST(COALESCE(expires_at,now()),now()) WHERE tenant_id=$1 AND user_id=$2 AND starts_at<now()", [tenantId, userId]);
+      await db.query("UPDATE delegations SET revoked_at=COALESCE(revoked_at,now()) WHERE tenant_id=$1 AND (delegator_id=$2 OR delegate_id=$2) AND revoked_at IS NULL", [tenantId, userId]);
+      await db.query("UPDATE client_devices SET status='revoked',push_enabled=false,revoked_at=COALESCE(revoked_at,now()),version=version+1 WHERE tenant_id=$1 AND user_id=$2 AND status<>'revoked'", [tenantId, userId]);
+      await db.query("UPDATE external_identities SET status='revoked',updated_at=now() WHERE tenant_id=$1 AND internal_subject_type='user' AND internal_subject_id=$2 AND status<>'revoked'", [tenantId, userId]);
       return "ok";
     });
   }

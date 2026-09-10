@@ -100,6 +100,7 @@
 | F-094 | 任务包子任务清单 | P0 | 已完成（本地工程范围） | F-077、F-016 | 任务卡内拆分/勾选/重开/删除子任务并显示 done/total；有子任务须全部完成才能提交验收，进入验收/完成后清单锁定；每条变更进入 `package_progress_updated` 事件链；Agent 只能经 R3 提案起草勾选建议 | E-141 |
 | F-095 | 成员管理（员工目录） | P0 | 已完成（本地工程范围） | F-013、F-014 | “组织与人才”页提供成员目录：管理员可新增/编辑（姓名/邮箱/部门/岗位/负责人）与停用；软删除保留历史与审计，有进行中任务禁止停用，不能停用自己；读 `organization_member:read`、写 `organization_member:admin` | E-143 |
 | F-096 | 员工入职登记 Agent 通道 | P0 | 已完成（本地工程范围） | F-095、F-020 | 会话内可用 `organization.list/add/update/deactivate_member`：入职只要求姓名（部门/岗位/邮箱可留空并后续补全），登记不授予任何角色与权限；停用/离职为 R2 待人工确认；工具入参不合规回灌模型纠正而非整轮失败 | E-144 |
+| F-097 | 停用员工的进入权收回 | P0 | 已完成（本地工程范围） | F-095、F-092、F-014 | 员工被停用后不能再进入枢纽 Agent：开发验证身份列表移除该身份、切换返回 `DEMO_IDENTITY_INACTIVE`、已签发会话因非在职被 401 拒绝且不回退为默认身份；生产按 `users.status/archived_at` 判定；停用同一事务收回角色授权、委托、客户端设备与外部身份；档案与历史任务审计保留 | E-145 |
 ## Pi 模块与函数级实现契约
 
 | 模块 ID | 对应功能 | 实现边界 | 主要接口/类 | 必须实现的函数与语义 | 持久化/事件 | 安全与失败策略 | Gate |
@@ -482,3 +483,5 @@
 - 2026-09-09：新增 F-095“成员管理（员工目录）”，形成 E-143。`organization` 模块新增 member-directory 纵切（域不变量/应用服务/Postgres+InMemory 仓储/runtime）与 HTTP `GET/POST /organization/members`、`PATCH/DELETE /organization/members/:id`；读 `organization_member:read`、写 `organization_member:admin`；邮箱租户唯一、岗位归属部门、版本 CAS、禁止停用自己、有进行中任务禁止停用；停用为软删除并保留历史与审计。“组织与人才”页并入“成员管理”卡片（目录 + 新增/编辑对话框 + 停用二次确认）。验证：单测 13 项、PGlite 集成（CRUD/RLS/审计/在岗保护/邮箱唯一）通过，全量 541 项通过，真实 dev server 新增→任务人员可见→编辑→停用 链路通过。
 
 - 2026-09-10：新增 F-096“员工入职登记 Agent 通道”，形成 E-144。会话内新增 `organization.list_members`/`add_member`/`update_member`/`deactivate_member` 与 `organization-member-directory` Skill：入职登记只要求姓名（部门/岗位/邮箱可留空、后续补全），只建立名册记录、不授予角色或权限，停用/离职仍需人工确认。修复两处通用缺陷：`filterToolsByIntent` 核心技能白名单未含新技能导致工具在注入模型前被裁掉；工具入参不合规会把整轮对话打成 422（改为回灌模型纠正重试）。真实会话验证：用户说“今天新入职了一名员工叫张三”，Agent 调用 `organization.add_member` 仅凭姓名登记张三（active、v1、部门/岗位留空），成员目录与任务可指派人员列表均可查到。验证：typecheck 0、lint 0、新增工具单测 6 项、全量 548 项通过、dev server 真实 E2E 通过。遗留：正式环境需在 roles/permissions 预置 `organization_member:admin/read`（当前仅开发白名单可用，默认失败关闭）。
+
+- 2026-09-10：新增 F-097“停用员工的进入权收回”，形成 E-145。用户报告“删去的员工仍能进入枢纽 Agent”：生产路径本就按 `users.status='active' AND archived_at IS NULL` 拒绝，但开发/内网验证身份路径未校验员工状态（旧会话 Cookie 继续可用、切换器仍列出并允许切换到已停用成员），且停用未收回角色授权/委托/设备/外部身份。现新增平台级 `EmployeeStatusChecker` 并在鉴权入口强制校验：停用身份的旧会话返回 401 且不回退为默认管理员，切换列表移除该身份、切换接口返回 `403 DEMO_IDENTITY_INACTIVE`，停用事务内一并收回 `user_roles`/`delegations`/`client_devices`/`external_identities`；软删除仍保留员工档案、历史任务与审计。验证：新增 `tests/integration/development-identity-gate.test.ts` 2 项 + Postgres 集成收回断言，真实 dev server 复核（已停用的陈屿：列表消失、切换 403、旧会话 401，在职管理员 200）。遗留：历史已停用数据中旧的角色授权行未做回填收回（当前判定以 users.status 优先，不影响拦截效果）；无“重新启用成员”入口，恢复需后续立项。

@@ -1,6 +1,7 @@
 import { createDevelopmentRequestContext, getDevelopmentIdentityByActorId } from "@/src/platform/context/development-context";
 import { assertRequestContext, type RequestContext } from "@/src/platform/context/request-context";
 import { readCookie, SESSION_COOKIE_NAME, verifySessionCookieWithRotation } from "@/src/platform/identity/session";
+import { getEmployeeStatusChecker } from "@/src/platform/identity/employee-status";
 import { enterRequestContext } from "@/src/platform/context/request-context-storage";
 import { getProductionAuthorizationResolver, type AuthorizationResolver } from "@/src/platform/identity/authorization-resolver";
 import { isLanDeployment } from "@/src/platform/config/runtime-config";
@@ -49,17 +50,24 @@ export async function resolveRequestContext(request: Request, authorizationResol
   const traceId = request.headers.get("x-trace-id")?.trim() || undefined;
   const demoSession = readCookie(request, SESSION_COOKIE_NAME);
   if (demoSession && process.env.SESSION_SECRET) {
+    let session: ReturnType<typeof verifySessionCookieWithRotation> | null = null;
     try {
-      const session = verifySessionCookieWithRotation(demoSession, [process.env.SESSION_SECRET, process.env.SESSION_SECRET_PREVIOUS ?? ""]);
+      session = verifySessionCookieWithRotation(demoSession, [process.env.SESSION_SECRET, process.env.SESSION_SECRET_PREVIOUS ?? ""]);
+    } catch {
+      // 无效或过期的开发 Cookie 被忽略；开发夹具回退到默认身份。
+      session = null;
+    }
+    if (session) {
       const identity = getDevelopmentIdentityByActorId(session.actorId);
       if (identity && session.tenantId === createDevelopmentRequestContext().tenantId) {
+        // 被停用/离职的员工不能再用旧会话进入枢纽 Agent：失败关闭，
+        // 且绝不回退成默认管理员（否则等于把"已停用"变成提权）。
+        if (!(await getEmployeeStatusChecker().isActive(session.tenantId, session.actorId))) throw new AuthenticationRequiredError();
         const context = createDevelopmentRequestContext(traceId, identity.key, session.sessionId);
         assertRequestContext(context);
         enterRequestContext(context);
         return context;
       }
-    } catch {
-      // An invalid development cookie is ignored; development falls back to the manager fixture.
     }
   }
   const context = createDevelopmentRequestContext(traceId);

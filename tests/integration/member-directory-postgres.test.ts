@@ -64,6 +64,26 @@ describe("Postgres member directory repository", () => {
     expect(retained.rows[0].archived_at).not.toBeNull();
   });
 
+  it("revokes the other doors on deactivation so a departed employee cannot get back in", async () => {
+    const manager = createDevelopmentRequestContext("pg-member-revoke");
+    const member = await directory.createMember(manager, { displayName: "离职收回验证", email: "revoke@example.test", orgUnitId: DELIVERY_ORG_ID });
+    // 设备、角色授权、外部身份是除会话之外的其他入口，停用后必须一并收回。
+    const roleId = crypto.randomUUID();
+    await database.query("INSERT INTO roles(id,tenant_id,code,name) VALUES($1,$2,'employee','员工') ON CONFLICT (tenant_id,code) DO NOTHING", [roleId, DEMO_TENANT_ID]);
+    await database.query("INSERT INTO user_roles(id,tenant_id,user_id,role_id,scope_type) VALUES($1,$2,$3,(SELECT id FROM roles WHERE tenant_id=$2 AND code='employee'),'tenant')", [crypto.randomUUID(), DEMO_TENANT_ID, member.id]);
+    await database.query("INSERT INTO client_devices(id,tenant_id,user_id,installation_id,display_name,client_type,platform,app_version,status,revoked_at) VALUES($1,$2,$3,$4,'离职员工设备','web_pwa','Windows','0.14.0','active',NULL)", [crypto.randomUUID(), DEMO_TENANT_ID, member.id, crypto.randomUUID()]);
+
+    await directory.deactivateMember(manager, member.id, { expectedVersion: member.version });
+
+    const roles = await database.query<{ expires_at: string | null }>("SELECT expires_at FROM user_roles WHERE user_id=$1", [member.id]);
+    expect(roles.rows[0].expires_at).not.toBeNull();
+    const devices = await database.query<{ status: string; revoked_at: string | null }>("SELECT status,revoked_at FROM client_devices WHERE user_id=$1", [member.id]);
+    expect(devices.rows[0]).toMatchObject({ status: "revoked" });
+    expect(devices.rows[0].revoked_at).not.toBeNull();
+    // 员工档案仍保留（软删除，不物理删）
+    expect((await database.query("SELECT 1 FROM users WHERE id=$1", [member.id])).rows).toHaveLength(1);
+  });
+
   it("refuses deactivation while the member still holds an active package and keeps the task assignee intact", async () => {
     const manager = createDevelopmentRequestContext("pg-member-guard");
     const assignee = await directory.createMember(manager, { displayName: "进行中任务负责人", email: "busy@example.test", orgUnitId: DELIVERY_ORG_ID });

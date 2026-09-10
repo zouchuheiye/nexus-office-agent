@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
-import { getDevelopmentIdentity } from "@/src/platform/context/development-context";
+import { DEMO_TENANT_ID, getDevelopmentIdentity } from "@/src/platform/context/development-context";
+import { getEmployeeStatusChecker } from "@/src/platform/identity/employee-status";
 import { isLanDeployment } from "@/src/platform/config/runtime-config";
 import { createSessionCookieValue, sessionCookieHeader } from "@/src/platform/identity/session";
 import { applicationErrorResponse, parseJson } from "@/src/platform/http/api-response";
@@ -24,6 +25,8 @@ export async function POST(request: Request) {
     const input = schema.parse(await parseJson(request));
     const identity = getDevelopmentIdentity(input.key);
     if (!identity) throw new Error("DEMO_IDENTITY_NOT_FOUND");
+    // 已被停用/离职的员工不能再登录枢纽 Agent（软删除保留档案，但不保留进入权）。
+    if (!(await getEmployeeStatusChecker().isActive(DEMO_TENANT_ID, identity.actorId))) throw new Error("DEMO_IDENTITY_INACTIVE");
     const value = createSessionCookieValue({
       tenantId: "00000000-0000-4000-8000-000000000001",
       actorId: identity.actorId,

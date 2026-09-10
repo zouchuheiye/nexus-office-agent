@@ -1,6 +1,7 @@
 import type { MemberDirectoryRepository, MemberDirectoryResult } from "@/src/modules/organization/application/member-directory-contracts";
 import type { DirectoryMember, OrgUnitOption, PositionOption } from "@/src/modules/organization/domain/member-directory";
 import { DEMO_MANAGER_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
+import { markEmployeeActive, markEmployeeInactive } from "@/src/platform/identity/employee-status";
 
 export const DEMO_MANAGEMENT_ORG_ID = "20000000-0000-4000-8000-000000000001";
 export const DEMO_DELIVERY_ORG_ID = "20000000-0000-4000-8000-000000000002";
@@ -75,6 +76,7 @@ export class InMemoryMemberDirectoryRepository implements MemberDirectoryReposit
       orgUnitName: ORG_UNITS.find((item) => item.id === member.orgUnitId)?.name,
       positionName: POSITIONS.find((item) => item.id === member.positionId)?.name,
     });
+    markEmployeeActive(member.id);
     return true;
   }
 
@@ -102,6 +104,8 @@ export class InMemoryMemberDirectoryRepository implements MemberDirectoryReposit
     if (index < 0 || this.members[index].version !== expectedVersion) return "version";
     // 内存仓储不模拟 work_packages；always ok after version check.
     this.members[index] = { ...this.members[index], status: "departed", archivedAt: new Date().toISOString(), version: this.members[index].version + 1 };
+    // 停用即失去进入权：内存夹具模式下同步标记，鉴权入口据此拒绝旧会话。
+    markEmployeeInactive(userId);
     return "ok";
   }
 }
