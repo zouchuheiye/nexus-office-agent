@@ -231,3 +231,5 @@
   - F-086 进度报表导出：service.exportReport + GET /api/v1/task-command/reports/export（format=csv|json，按 assigneeId / missionId / from / to 过滤，CSV 带 UTF-8 BOM 便于 Excel 打开）；看板页加"导出报表"按钮。
   - F-083 周期摘要：service.generatePeriodicSummary（scope=daily|weekly，汇总 我的/我发布/我负责 的完成/进行/逾期/卡住），脚本 scripts/task-summary.ts 生成摘要并发布到消息池（source_run_id=	ask-summary:{scope}:{period} 幂等），人确认后发出。
   全部记录于本台账，代码不提交远端。证据：E-103（2026-08-27 本地工程完成）。
+
+- D-044 · 2026-09-10：用户确认离职名单的可见性边界（对应 F-097/F-100/E-148）。用户原话为"只有管理员能看到谁谁谁已离职，其他人看不到在职人员"，其中第二句存在两种解释，用户已明确选择：**非管理员保留"在职同事目录"可见**（普通成员仍能查到在职同事以便协作），**只有"已停用/离职名单"收紧为管理员能力**——`GET /organization/members?includeDeparted=true` 需 `organization_member:admin`，非管理员显式索取返回 `403 ACCESS_DENIED`（不静默降级为空列表），默认目录仅含在职成员；成员的停用与重新启用同样是管理员能力。该决定排除了"整个成员目录仅管理员可见"与"普通成员只能看到自己"两种更严格方案。证据：E-148；用户 2026-09-10 会话确认。
