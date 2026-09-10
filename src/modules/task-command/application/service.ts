@@ -326,6 +326,13 @@ export class TaskCommandService {
       };
     });
     const missingFields = [...new Set<WorkTemplateField>([...missionMissing, ...normalizedPackages.flatMap((item) => item.missingFields)])];
+    // 数据库约束 due_at > created_at：逾期任务只能是"随时间推移变逾期"，不能在发布时直接写成过去时间。
+    // 之前这条路会撞库约束并返回 500；这里提前用领域错误拦住，并给出可执行的原因。
+    for (const item of normalizedPackages) {
+      if (new Date(item.dueAt).getTime() <= now.getTime()) {
+        throw new Error("WORK_PACKAGE_DUE_AT_IN_PAST");
+      }
+    }
     for (const item of normalizedPackages) {
       if (item.assignmentMode === "direct") {
         requirePermission(context, "work_task:assign");

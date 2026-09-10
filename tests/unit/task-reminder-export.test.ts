@@ -129,6 +129,9 @@ describe("D-043: 后台到期提醒 / 负载 / 报表 / 周期摘要", () => {
     const { service, publisher, conversation } = await fixture();
     const nowMs = Date.now();
     const iso = (offsetDays: number) => new Date(nowMs + offsetDays * 86_400_000).toISOString();
+    // 逾期任务不能"发布时就写成过去时间"（服务端已按 due_at > created_at 拦截），
+    // 所以这里把截止时间设成 1 秒后，等真实时间越过它，让"随时间推移变逾期"这条真实路径发生。
+    const firstDeadline = new Date(nowMs + 1_000).toISOString();
     const bundle = await service.publishMission(publisher, {
       conversationId: conversation.id,
       title: "导出过滤任务",
@@ -136,7 +139,7 @@ describe("D-043: 后台到期提醒 / 负载 / 报表 / 周期摘要", () => {
       priority: "high",
       dueAt: "2030-12-01T00:00:00.000Z",
       packages: [
-        { title: "我负责·已逾期", description: "B。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_DELIVERY_OWNER_ID, priority: "high", dueAt: iso(-2), startedAt: iso(-30), estimatedDays: 2, capacityPoints: 1 },
+        { title: "我负责·已逾期", description: "B。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_DELIVERY_OWNER_ID, priority: "high", dueAt: firstDeadline, startedAt: iso(-30), estimatedDays: 2, capacityPoints: 1 },
         { title: "我发布·进行中", description: "C。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_PRODUCT_OWNER_ID, priority: "medium", dueAt: iso(10), startedAt: iso(-5), estimatedDays: 5, capacityPoints: 2 },
         { title: "我发布·已完成", description: "D。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "direct", assigneeId: DEMO_MANAGER_ID, priority: "low", dueAt: iso(10), startedAt: iso(-5), estimatedDays: 5, capacityPoints: 1 },
       ],
@@ -145,6 +148,7 @@ describe("D-043: 后台到期提醒 / 负载 / 报表 / 周期摘要", () => {
     // 直派包初始为 assigned；把第三包按合法路径推进到 completed（in_progress→completed 需证据）
     const running = await service.transitionPackage(publisher, taskIds[2], { expectedVersion: 1, nextStatus: "in_progress" });
     await service.transitionPackage(publisher, taskIds[2], { expectedVersion: running.version, nextStatus: "completed", evidenceRefs: ["document:export-accepted"] });
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
     // 发布方视角：全部 + status + overdueOnly
     const byStatus = await service.exportReport(publisher, { status: "completed" });
     expect(byStatus.rows.map(({ id }) => id)).toEqual([taskIds[2]]);
@@ -167,21 +171,24 @@ describe("D-043: 后台到期提醒 / 负载 / 报表 / 周期摘要", () => {
     const { service, publisher, conversation } = await fixture();
     const now = new Date();
     const iso = (offsetHours: number) => new Date(now.getTime() + offsetHours * 3_600_000).toISOString();
+    // 两个包在发布时都是未来截止（合法）；扫描时把"当前时间"推到 48 小时后，
+    // 让"逾期包"依靠真实时间推移变逾期（发布已逾期任务会被服务端拒绝）。
     await service.publishMission(publisher, {
       conversationId: conversation.id,
       title: "提醒任务",
       objective: "验证提醒。",
       priority: "high",
-      dueAt: iso(24),
+      dueAt: iso(96),
       packages: [
-        { title: "临期包", description: "快到期。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "open_claim", priority: "high", dueAt: iso(24), startedAt: iso(-48), estimatedDays: 3, capacityPoints: 1 },
-        { title: "逾期包", description: "已逾期。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "open_claim", priority: "high", dueAt: iso(-72), startedAt: iso(-168), estimatedDays: 3, capacityPoints: 1 },
+        { title: "临期包", description: "快到期。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "open_claim", priority: "high", dueAt: iso(72), startedAt: iso(-48), estimatedDays: 3, capacityPoints: 1 },
+        { title: "逾期包", description: "稍后逾期。", acceptanceCriteria: "完成。", requiredSkills: ["交付"], assignmentMode: "open_claim", priority: "high", dueAt: iso(24), startedAt: iso(-168), estimatedDays: 3, capacityPoints: 1 },
       ],
     });
-    const first = await service.runReminderScan(publisher, { now: now.toISOString(), dueSoonHours: 72 });
+    const scanNow = new Date(now.getTime() + 48 * 3_600_000).toISOString();
+    const first = await service.runReminderScan(publisher, { now: scanNow, dueSoonHours: 72 });
     expect(first.scanned).toBe(2);
     expect(first.created).toBe(2);
-    const second = await service.runReminderScan(publisher, { now: now.toISOString(), dueSoonHours: 72 });
+    const second = await service.runReminderScan(publisher, { now: scanNow, dueSoonHours: 72 });
     expect(second.created).toBe(0);
     expect(second.deduplicated).toBe(2);
     const workspace = await service.workspace(publisher);

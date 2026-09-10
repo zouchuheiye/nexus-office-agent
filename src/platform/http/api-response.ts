@@ -50,6 +50,7 @@ const errorRules: ErrorRule[] = [
   { match: codes(["AGENT_JOB_STATE_CONFLICT", "AGENT_JOB_RESOLUTION_CONFLICT", "AGENT_JOB_EVIDENCE_REQUIRED"]), status: 409, message: "任务状态、幂等请求或人工核对证据不满足处置要求。" },
   { match: codes(["WORK_PACKAGE_VERSION_CONFLICT", "WORK_PACKAGE_NOT_CLAIMABLE", "WORK_MISSION_CONFLICT"]), status: 409, message: "任务已被他人承接、版本已变化或当前状态不允许该操作。" },
   { match: codes(["WORK_TEMPLATE_ONLY"]), status: 422, message: "只有任务模板可以在模板入口直接修改；正式任务请走正式状态变更流程。" },
+  { match: codes(["WORK_PACKAGE_DUE_AT_IN_PAST", "WORK_INVALID_TIME_RANGE"]), status: 422, message: "任务时间不合法：截止时间必须晚于开始时间，也必须晚于当前时间（已经逾期的任务要随实际时间推移产生，不能在发布时直接写成过去时间）。" },
   { match: codes(["MEMBER_NOT_FOUND"]), status: 404, message: "成员不存在或已不在当前组织。" },
   { match: codes(["WORK_NOTIFICATION_NOT_FOUND"]), status: 404, message: "通知不存在，或者不属于当前用户（通知只能由收件人自己读取）。" },
   { match: (code) => code.startsWith("MEMBER_"), status: 409, message: "成员资料存在冲突，请刷新后重试。" },

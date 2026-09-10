@@ -4,7 +4,7 @@ import { TaskCommandService } from "@/src/modules/task-command/application/servi
 import { addPackageSubtaskSchema, transitionPackageSchema, updatePackageSubtaskSchema } from "@/src/modules/task-command/application/schemas";
 import { DEMO_DELIVERY_OWNER_ID, DEMO_OPERATIONS_OWNER_ID, DEMO_PRODUCT_ORG_ID, DEMO_PRODUCT_OWNER_ID, InMemoryTaskCommandRepository } from "@/src/modules/task-command/infrastructure/in-memory-repository";
 import { createDevelopmentRequestContext, DEMO_MANAGER_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
-import { createMissionBundle, createTaskTemplateBundle } from "@/src/modules/task-command/domain/task-command";
+import { createMissionBundle, createTaskTemplateBundle, dueStateOf } from "@/src/modules/task-command/domain/task-command";
 import { ToolRegistry } from "@/src/modules/agent/domain/tool";
 import { registerTaskCommandTools } from "@/src/modules/task-command/application/agent-tools";
 
@@ -63,6 +63,18 @@ describe("real-time task command domain", () => {
     expect(firstPage).toHaveLength(2);
     expect(nextPage).toHaveLength(1);
     expect(nextPage[0].sequence).toBeGreaterThan(firstPage[1].sequence);
+  });
+
+  it("拒绝把截止时间写成过去（领域错误而不是 500 或库约束）", async () => {
+    const { service, publisher, conversation } = await fixture();
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await expect(service.publishMission(publisher, {
+      ...missionInput(conversation.id),
+      packages: [{ ...missionInput(conversation.id).packages[1], dueAt: past }],
+    })).rejects.toThrow("WORK_PACKAGE_DUE_AT_IN_PAST");
+    // 未来时间照常发布
+    const published = await service.publishMission(publisher, missionInput(conversation.id));
+    expect(published.created).toBe(true);
   });
 
   it("exposes the complete authorized global event history, including handoff-only tasks", async () => {
@@ -279,11 +291,13 @@ describe("real-time task command domain", () => {
 
   it("F-079: workspace exposes due state for overdue, due-soon and normal tasks", async () => {
     const { service, publisher, conversation } = await fixture();
-    const overdue = (await service.publishMission(publisher, { ...missionInput(conversation.id), packages: [{ title: "已逾期", description: "d", acceptanceCriteria: "a", requiredSkills: [], assignmentMode: "open_claim", priority: "high", dueAt: "2020-01-01T00:00:00.000Z", startedAt: "2019-12-01T00:00:00.000Z", estimatedDays: 7, capacityPoints: 1 }] })).packages[0];
-    const dueSoon = (await service.publishMission(publisher, { ...missionInput(conversation.id), packages: [{ title: "临期", description: "d", acceptanceCriteria: "a", requiredSkills: [], assignmentMode: "open_claim", priority: "medium", dueAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(), startedAt: new Date().toISOString(), estimatedDays: 7, capacityPoints: 1 }] })).packages[0];
+    // 逾期任务不可能在发布时就写成过去时间（PostgreSQL 约束 due_at > created_at，服务端改为返回
+    // WORK_PACKAGE_DUE_AT_IN_PAST），所以逾期只能"随时间推移"产生：这里用同一个领域函数验证逾期判定，
+    // 再用真实发布验证临期/正常两态在 workspace 上的口径。
+    expect(dueStateOf({ status: "published", dueAt: "2020-01-01T00:00:00.000Z" }, new Date("2026-09-10T00:00:00.000Z"))).toBe("overdue");
+    const dueSoon = (await service.publishMission(publisher, { ...missionInput(conversation.id), packages: [{ title: "临期", description: "d", acceptanceCriteria: "a", requiredSkills: [], assignmentMode: "open_claim", priority: "medium", dueAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(), startedAt: new Date(Date.now() - 24 * 3600 * 1000).toISOString(), estimatedDays: 7, capacityPoints: 1 }] })).packages[0];
     const normal = (await service.publishMission(publisher, { ...missionInput(conversation.id), packages: [{ title: "正常", description: "d", acceptanceCriteria: "a", requiredSkills: [], assignmentMode: "open_claim", priority: "medium", dueAt: "2030-08-20T10:00:00.000Z", startedAt: "2030-08-01T00:00:00.000Z", estimatedDays: 7, capacityPoints: 1 }] })).packages[0];
     const published = (await service.workspace(publisher)).publishedByMe;
-    expect(published.find(({ id }) => id === overdue.id)?.dueState).toBe("overdue");
     expect(published.find(({ id }) => id === dueSoon.id)?.dueState).toBe("due_soon");
     expect(published.find(({ id }) => id === normal.id)?.dueState).toBe("normal");
   });
