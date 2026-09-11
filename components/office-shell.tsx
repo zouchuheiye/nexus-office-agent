@@ -43,7 +43,9 @@ import {
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ManagementLoopView } from "@/components/management-loop-view";
 import { IntegrationCenterView } from "@/components/integration-center-view";
-import { GovernanceCenterView } from "@/components/governance-center-view";
+import { ApprovalWorkbenchView } from "@/components/approval-workbench-view";
+import { MeetingCenterView } from "@/components/meeting-center-view";
+import { LibraryCenterView } from "@/components/library-center-view";
 import { EnterpriseIntelligenceView } from "@/components/enterprise-intelligence-view";
 import { ClientPlatformView } from "@/components/client-platform-view";
 import { EnterpriseGovernanceView } from "@/components/enterprise-governance-view";
@@ -150,7 +152,8 @@ const primaryNav: NavItem[] = [
   { id: "approvals", label: "智能审批", icon: FileCheck2 },
   { id: "people", label: "组织与人才", icon: Users },
   { id: "goals", label: "目标与绩效", icon: Goal },
-  { id: "knowledge", label: "知识与会议", icon: Library },
+  { id: "meetings", label: "会议纪要", icon: MessageSquareText },
+  { id: "knowledge", label: "企业信息库", icon: Library },
   { id: "insights", label: "经营洞察", icon: Gauge },
   { id: "automation", label: "自动化中心", icon: GitBranch },
 ];
@@ -632,8 +635,9 @@ export function OfficeShell() {
     client: () => <ClientPlatformView onNotice={showNotice} />,
     "management-intelligence": () => <ManagementIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} />,
     "enterprise-governance": () => <EnterpriseGovernanceView actorId={identity?.actorId ?? null} selectedProjectId={selectedProjectId} onNotice={showNotice} />,
-    approvals: () => <GovernanceCenterView onNotice={showNotice} focus="approvals" />,
-    knowledge: () => <GovernanceCenterView onNotice={showNotice} focus="knowledge" />,
+    approvals: () => <ApprovalWorkbenchView onNotice={showNotice} />,
+    meetings: () => <MeetingCenterView onNotice={showNotice} />,
+    knowledge: () => <LibraryCenterView onNotice={showNotice} />,
     goals: () => <EnterpriseIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} focus="goals" />,
     insights: () => <EnterpriseIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} focus="insights" />,
     people: () => <EnterpriseIntelligenceView actorId={identity?.actorId ?? null} onNotice={showNotice} focus="people" />,

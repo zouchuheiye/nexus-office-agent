@@ -149,6 +149,68 @@
 .citation-results { display: grid; gap: 9px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }.citation-results article { padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }.citation-results article > div { display: flex; gap: 6px; color: var(--ink-2); font-size: 9px; }.citation-results article > div span { color: var(--teal-dark); font-family: var(--font-mono); }.citation-results p { margin: 7px 0; color: var(--ink-2); font-size: 10px; line-height: 1.55; }.citation-results small { display: flex; align-items: start; gap: 4px; color: var(--ink-3); font-size: 8px; line-height: 1.4; }
 .knowledge-policy-note { display: flex; align-items: start; gap: 10px; padding: 14px; color: white; background: var(--ink); border-radius: 11px; }.knowledge-policy-note svg { flex: 0 0 auto; color: #72ddc0; }.knowledge-policy-note strong { font-size: 11px; }.knowledge-policy-note p { margin: 5px 0 0; color: #9eadb0; font-size: 9px; line-height: 1.55; }.governance-empty { padding: 36px 0; color: var(--ink-3); text-align: center; }
 @container (max-width: 860px) { .governance-columns { min-width: 0; grid-template-columns: minmax(0,1fr); }.governance-card,.knowledge-rail { min-width: 0; }.knowledge-rail { grid-row: auto; }.governance-metrics { grid-template-columns: 1fr 1fr; }.governance-metrics > div:nth-child(2) { border-right: 0; }.governance-metrics > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } }
+/* 企业信息库（E-162）：分类分组列表、上传/文本发布表单、版本历史表。 */
+.library-card .governance-card-head { align-items: flex-start; gap: 12px; }
+.library-actions { display: flex; gap: 8px; }
+.library-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper-raised); color: var(--ink-2); font-size: 10.5px; font-weight: 700; cursor: pointer; }
+.library-actions button.library-primary { border-color: var(--teal-dark); background: var(--teal-dark); color: white; }
+.library-filters { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; margin: 14px 0; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.library-filters label { display: grid; gap: 5px; color: var(--ink-3); font-size: 9px; }
+.library-filters label.library-check { display: flex; align-items: center; gap: 5px; font-size: 10.5px; }
+.library-filters select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper-raised); font-size: 11px; }
+.library-keyword { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 240px; height: 34px; padding-left: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper-raised); }
+.library-keyword svg { color: var(--ink-3); }
+.library-keyword input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; font-size: 11px; }
+.library-keyword button { align-self: stretch; padding: 0 11px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--teal-dark); font-weight: 700; font-size: 10px; cursor: pointer; }
+.library-upload { display: grid; gap: 11px; margin: 6px 0 16px; padding: 15px; border: 1px solid var(--teal-dark); border-radius: 11px; background: var(--surface-2); }
+.library-upload header { display: flex; align-items: start; gap: 9px; }
+.library-upload header svg { color: var(--teal-dark); }
+.library-upload header strong { font-size: 12px; }
+.library-upload header small { display: block; margin-top: 3px; color: var(--ink-3); font-size: 9.5px; line-height: 1.5; }
+.library-upload label { display: grid; gap: 5px; color: var(--ink-2); font-size: 10px; }
+.library-upload label.library-check { display: flex; align-items: center; gap: 6px; }
+.library-upload input,.library-upload select,.library-upload textarea { padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); font: inherit; font-size: 11px; }
+.library-form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.library-hint { margin: 0; color: var(--ink-3); font-size: 9.5px; line-height: 1.55; }
+.library-upload footer { display: flex; justify-content: flex-end; gap: 8px; }
+.library-upload footer button { padding: 7px 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); font-size: 10.5px; font-weight: 700; cursor: pointer; }
+.library-upload footer button.library-primary { border-color: var(--teal-dark); background: var(--teal-dark); color: white; }
+.library-group { margin-top: 16px; }
+.library-group h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; color: var(--ink-2); font-size: 11px; letter-spacing: .02em; }
+.library-group h3 b { padding: 2px 6px; border-radius: 999px; background: var(--paper-muted); color: var(--ink-3); font: 700 9px/1.5 var(--font-mono); }
+.library-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); }
+.library-item + .library-item { margin-top: 8px; }
+.library-item-main { min-width: 0; display: grid; gap: 6px; }
+.library-item-title { display: flex; align-items: center; gap: 7px; }
+.library-item-title svg { color: var(--teal-dark); }
+.library-item-title strong { font-size: 12px; }
+.library-item-title small { color: var(--ink-3); font: 700 9px/1 var(--font-mono); }
+.library-item p { margin: 0; color: var(--ink-2); font-size: 10.5px; line-height: 1.55; }
+.library-item-scope { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--ink-3); font-size: 9px; }
+.library-item-scope em { padding: 3px 6px; border-radius: 5px; background: var(--paper-muted); font-style: normal; }
+.library-item-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; }
+.library-item-actions button,.library-item-actions a { display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--ink-2); font-size: 10px; font-weight: 700; text-decoration: none; cursor: pointer; }
+.library-item-actions a { border-color: var(--teal-dark); color: var(--teal-dark); }
+.library-detail-summary { margin: 10px 0 0; color: var(--ink-2); font-size: 11px; line-height: 1.6; }
+.library-detail-scope { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 1px; margin: 12px 0; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--line); }
+.library-detail-scope > div { padding: 9px 11px; background: var(--paper); }
+.library-detail-scope span { display: block; color: var(--ink-3); font-size: 9px; }
+.library-detail-scope strong { display: block; margin-top: 5px; font-size: 11px; }
+.library-versions { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+.library-versions th { padding: 7px 8px; border-bottom: 1px solid var(--line); color: var(--ink-3); font-size: 9px; text-align: left; }
+.library-versions td { padding: 8px; border-bottom: 1px solid var(--rule); color: var(--ink-2); }
+.library-versions td small { color: var(--ink-3); }
+.library-versions a { display: inline-flex; align-items: center; gap: 4px; color: var(--teal-dark); font-weight: 700; text-decoration: none; }
+.library-list { display: grid; gap: 6px; }
+.library-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper-raised); text-align: left; cursor: pointer; }
+.library-row.is-active { border-color: var(--teal-dark); background: var(--mint); }
+.library-row div { min-width: 0; display: grid; gap: 3px; }
+.library-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.library-row small { color: var(--ink-3); font-size: 9px; }
+.library-policy-list { display: grid; gap: 9px; margin: 12px 0 0; padding: 0; list-style: none; }
+.library-policy-list li { padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.library-policy-list b { display: block; font-size: 11px; }
+.library-policy-list small { display: block; margin-top: 4px; color: var(--ink-3); font-size: 9.5px; line-height: 1.5; }
 @media (max-width: 760px) { .governance-hero { align-items: start; flex-direction: column; }.governance-safety { align-self: start; }.form-facts,.minutes-grid { grid-template-columns: 1fr; }.form-facts > div,.form-facts > div:nth-child(2n),.form-facts > div:nth-last-child(-n+2) { border-right: 0; border-bottom: 1px solid var(--line); }.form-facts > div:last-child { border-bottom: 0; }.meeting-meta,.approval-title { align-items: start; flex-direction: column; }.workbench-actions { align-items: stretch; flex-direction: column; }.workbench-actions button { justify-content: center; } }
 
 /* Strategy, operating review, organization and protected talent evidence */
