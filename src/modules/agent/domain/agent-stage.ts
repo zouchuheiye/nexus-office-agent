@@ -27,3 +27,20 @@ type StageInput = Omit<AgentStageEvent, "at">;
 export function createAgentStage(input: StageInput): AgentStageEvent {
   return { ...input, at: new Date().toISOString() };
 }
+
+/**
+ * P5：token 级流式输出的文本增量。
+ *
+ * 内容是"模型正在生成"的预览，来自结构化 JSON 的 `answer` 字段（见 `AnswerStreamExtractor`）：
+ * 最终回答仍然由服务端解析校验后落库；预览只在生成过程中显示，收到结果时由界面替换。
+ */
+export type AgentAnswerDelta = {
+  text: string;
+  /** 产生这段文本的模型推理轮次（1 起）。 */
+  round: number;
+  at: string;
+};
+
+export function createAgentDelta(input: Omit<AgentAnswerDelta, "at">): AgentAnswerDelta {
+  return { ...input, at: new Date().toISOString() };
+}

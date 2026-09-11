@@ -133,6 +133,7 @@ export function WorkCommandCenter({
   onNotice,
   notificationRequest,
   agentStage,
+  agentDraft,
   onRetryMessage,
 }: {
   messages: DisplayMessage[];
@@ -149,6 +150,8 @@ export function WorkCommandCenter({
   notificationRequest?: number;
   /** P5：服务端回报的真实阶段文案（运行中显示，不做假进度）。 */
   agentStage?: string;
+  /** P5：token 级流式预览（模型正在生成的回答文本，最终结果会替换它）。 */
+  agentDraft?: string;
   /** P5：一键重试失败的那条请求。 */
   onRetryMessage?: (message: string) => void;
 }) {
@@ -599,7 +602,7 @@ export function WorkCommandCenter({
               {message.failed && message.retryOf ? <div className="command-retry"><button type="button" onClick={() => onRetryMessage?.(message.retryOf!)}>重试这条请求<RotateCcw size={13} /></button><small>原始内容已保留，不需要重新输入</small></div> : null}
             </div>
           </article>)}
-          {isThinking ? <article className="command-message is-assistant"><span className="command-message-avatar"><Bot size={16} /></span><div className="command-thinking"><i /><i /><i /><span>{agentStage || "正在处理"}</span></div></article> : null}
+          {isThinking ? <article className="command-message is-assistant"><span className="command-message-avatar"><Bot size={16} /></span><div className={`command-thinking${agentDraft ? " has-draft" : ""}`}>{agentDraft ? null : <><i /><i /><i /></>}<span className="command-thinking-stage">{agentStage || "正在处理"}</span>{agentDraft ? <p className="command-draft" aria-live="polite" aria-label="正在生成的回答">{agentDraft}</p> : null}</div></article> : null}
           <div ref={conversationEnd} />
         </div>
 

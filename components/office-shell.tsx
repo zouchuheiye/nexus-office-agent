@@ -208,13 +208,14 @@ type AgentStreamOutcome = {
 };
 
 /**
- * P5：以 SSE 读取 Agent 运行，边跑边回报服务端的真实阶段。
+ * P5：以 SSE 读取 Agent 运行，边跑边回报服务端的真实阶段与回答文本增量。
  * 服务端失败会用 error 事件表达（此时响应头已发出），因此这里也要处理 error 事件；
  * 若环境不支持流式读取，则退回普通 JSON 请求，保证功能不因体验优化而丢失。
  */
 async function runAgentStream(
   body: Record<string, unknown>,
   onStage: (label: string) => void,
+  onDelta?: (text: string) => void,
 ): Promise<AgentStreamOutcome> {
   const response = await fetch("/api/v1/agent/runs?stream=1", {
     method: "POST",
@@ -243,6 +244,7 @@ async function runAgentStream(
       const event = eventLine.slice("event: ".length).trim();
       const data = JSON.parse(dataLine.slice("data: ".length)) as Record<string, unknown>;
       if (event === "stage") onStage(String(data.label ?? ""));
+      else if (event === "delta") onDelta?.(String(data.text ?? ""));
       else if (event === "final") outcome = data as unknown as AgentStreamOutcome;
       else if (event === "error") failure = new Error(String(data.message ?? "Agent 请求失败"));
     }
@@ -264,6 +266,8 @@ export function OfficeShell() {
   const [primaryConversationId, setPrimaryConversationId] = useState("");
   const [isThinking, setIsThinking] = useState(false);
   const [agentStage, setAgentStage] = useState("");
+  /** P5：token 级流式预览（模型正在生成、服务端尚未校验的回答文本）。 */
+  const [agentDraft, setAgentDraft] = useState("");
   const [confirmingProposal, setConfirmingProposal] = useState("");
   const [notice, setNotice] = useState("");
   const [amendDraftOpen, setAmendDraftOpen] = useState(false);
@@ -431,13 +435,14 @@ export function OfficeShell() {
     setMessages((current) => [...current, { role: "user", content: message }]);
     setIsThinking(true);
     setAgentStage("正在理解你的要求…");
+    setAgentDraft("");
     try {
       const outcome = await runAgentStream({
         message,
         conversationId: primaryConversationId,
         contextRefs: selectedProjectId ? [`project:${selectedProjectId}`] : [],
         clientRequestId: crypto.randomUUID(),
-      }, setAgentStage);
+      }, setAgentStage, (text) => setAgentDraft((current) => current + text));
       const run = outcome.run;
       setMessages((current) => [...current, {
         role: "assistant",
@@ -459,6 +464,7 @@ export function OfficeShell() {
     } finally {
       setIsThinking(false);
       setAgentStage("");
+      setAgentDraft("");
     }
   }
 
@@ -598,6 +604,7 @@ export function OfficeShell() {
         onNotice={showNotice}
         notificationRequest={notificationRequest}
         agentStage={agentStage}
+        agentDraft={agentDraft}
         onRetryMessage={(message) => void retryAgentMessage(message)}
       />
     </>,

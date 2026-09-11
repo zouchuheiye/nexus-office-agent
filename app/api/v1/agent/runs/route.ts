@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAgentRunSchema } from "@/src/modules/agent/application/schemas";
 import { getAgentOrchestrator } from "@/src/modules/agent/runtime";
-import type { AgentStageEvent } from "@/src/modules/agent/domain/agent-stage";
+import type { AgentAnswerDelta, AgentStageEvent } from "@/src/modules/agent/domain/agent-stage";
 import { resolveRequestContext } from "@/src/platform/context/resolve-request-context";
 import { applicationErrorResponse, describeApplicationError, parseJson } from "@/src/platform/http/api-response";
 
@@ -25,8 +25,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ data: { run, proposal }, meta: { traceId: context.traceId } }, { status: 201 });
     }
 
-    // P5：真实阶段进度。运行本身仍是同一条服务端链路，只是把"走到哪一步"边跑边推给页面，
-    // 避免用户对着转圈猜 10~30 秒。事件类型：stage（阶段）/ final（结果）/ error（失败）。
+    // P5：真实阶段进度 + token 级流式预览。运行本身仍是同一条服务端链路，只是把"走到哪一步"和
+    // "正在生成哪几个字"边跑边推给页面，避免用户对着转圈猜 10~30 秒。
+    // 事件类型：stage（阶段）/ delta（回答文本增量预览）/ final（结果）/ error（失败）。
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -40,6 +41,7 @@ export async function POST(request: Request) {
         try {
           const run = await orchestrator.createRun(context, input, {
             onStage: (stage: AgentStageEvent) => send("stage", stage),
+            onDelta: (delta: AgentAnswerDelta) => send("delta", delta),
           });
           const proposal = run.output?.proposalId ? await orchestrator.getProposal(context, run.output.proposalId) : undefined;
           send("final", { run, proposal });

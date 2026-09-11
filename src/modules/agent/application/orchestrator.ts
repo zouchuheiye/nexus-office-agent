@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { z, ZodError } from "zod";
-import type { ModelGateway, ModelMessage, ModelResponse, ModelToolCall } from "@/src/modules/agent/domain/model-gateway";
+import type { ModelGateway, ModelMessage, ModelRequest, ModelResponse, ModelToolCall } from "@/src/modules/agent/domain/model-gateway";
+import { AnswerStreamExtractor } from "@/src/modules/agent/domain/answer-stream";
+import { createAgentDelta, createAgentStage, type AgentAnswerDelta, type AgentStageEvent } from "@/src/modules/agent/domain/agent-stage";
 import { createAgentRun, sha256, type AgentRun } from "@/src/modules/agent/domain/agent-run";
-import { createAgentStage, type AgentStageEvent } from "@/src/modules/agent/domain/agent-stage";
 import { approveProposal, createProposal, proposalInputDigest, supersedeProposal, type AgentProposal } from "@/src/modules/agent/domain/proposal";
 import { assertToolPolicy, modelToolName, type AgentTool, type ToolRegistry } from "@/src/modules/agent/domain/tool";
 import { createDefaultSkillRegistry, type SkillRegistry } from "@/src/modules/agent/domain/skill";
@@ -132,6 +133,12 @@ function parseFinalAnswer(content: string, actualSkills: Iterable<string>) {
 export type AgentRunHooks = {
   /** 真实阶段进度（P5）：服务端走到哪一步就报哪一步，回调异常不影响运行。 */
   onStage?: (event: AgentStageEvent) => void;
+  /**
+   * token 级流式输出（P5）：把模型正在生成的**回答文本增量**交出去。
+   * 只在该轮模型调用支持流式时触发；内容是从结构化 JSON 的 `answer` 字段里解码出来的预览，
+   * 最终回答仍以服务端解析校验后的结果为准。
+   */
+  onDelta?: (delta: AgentAnswerDelta) => void;
 };
 
 export class AgentOrchestrator {
@@ -150,6 +157,11 @@ export class AgentOrchestrator {
     const emit = (stage: Omit<AgentStageEvent, "at">) => {
       if (!hooks?.onStage) return;
       try { hooks.onStage(createAgentStage(stage)); } catch { /* 进度上报失败不影响业务 */ }
+    };
+    // token 级预览同样是旁路：抽不出内容或回调抛错都不影响运行与落库。
+    const emitDelta = (text: string, round: number) => {
+      if (!hooks?.onDelta || !text) return;
+      try { hooks.onDelta(createAgentDelta({ text, round })); } catch { /* 流式预览失败不影响业务 */ }
     };
     if (input.clientRequestId) {
       const existing = await this.store.getRunByClientRequest(context.tenantId, context.actorId, input.clientRequestId);
@@ -225,12 +237,19 @@ export class AgentOrchestrator {
             round: round + 1,
             label: round === 0 ? "正在梳理下一步…" : "正在根据工具结果继续推进…",
           });
-          const response = await measureOperation("agent.model.complete", { classification: outboundClassification }, () => this.model.complete({
-            tenantId: context.tenantId, traceId: context.traceId, dataClassification: outboundClassification, messages,
-            tools: availableTools.map((tool) => ({ name: modelToolName(tool.id), description: `${tool.description} 所属 Skill：${tool.skillId}。`, inputSchema: tool.inputJsonSchema })),
-            toolChoice: availableTools.length ? "auto" : "none",
-            responseFormat: "json",
-          }));
+          const response = await measureOperation("agent.model.complete", { classification: outboundClassification }, () => {
+            const request: ModelRequest = {
+              tenantId: context.tenantId, traceId: context.traceId, dataClassification: outboundClassification, messages,
+              tools: availableTools.map((tool) => ({ name: modelToolName(tool.id), description: `${tool.description} 所属 Skill：${tool.skillId}。`, inputSchema: tool.inputJsonSchema })),
+              toolChoice: availableTools.length ? "auto" : "none",
+              responseFormat: "json",
+            };
+            // 只有"有人在听"且模型通道支持流式时才走流式；否则保持原来的整段调用。
+            const streamed = hooks?.onDelta && typeof this.model.completeStream === "function" ? this.model.completeStream : undefined;
+            if (!streamed) return this.model.complete(request);
+            const extractor = new AnswerStreamExtractor();
+            return streamed.call(this.model, request, (chunk) => emitDelta(extractor.push(chunk), round + 1));
+          });
           lastResponse = response;
           usage.inputTokens += response.inputTokens; usage.outputTokens += response.outputTokens; usage.latencyMs += response.latencyMs;
           usage.provider = response.provider; usage.model = response.model;

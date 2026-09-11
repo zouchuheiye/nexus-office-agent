@@ -108,15 +108,17 @@ R3 提案（可编辑预览卡）：`GET /agent/proposals/:id` 返回本人可�
 
 ### 运行事件
 
-- run.started
-- retrieval.completed
-- response.delta
-- proposal.created
-- confirmation.required
-- tool.started
-- tool.completed
-- run.completed
-- run.failed
+`POST /api/v1/agent/runs` 的流式通道（`?stream=1` 或 `Accept: text/event-stream`）用 SSE 推送四类事件：
+
+- `ready`：响应头已建立，载荷为 `{traceId, actorId}`。
+- `stage`：服务端真的走到了哪一步（`classification` → `context` → 逐轮 `thinking` → 逐个 `tool`（`started`/`finished`）→ `answer`），载荷为 `AgentStageEvent`（含人话 `label`、`round`、`at`）。不做百分比、不预测耗时。
+- `delta`（P5 token 级流式）：正在生成的**回答文本增量**，载荷为 `{text, round, at}`。`text` 是从模型结构化 JSON 的**顶层 `answer` 字段**解码出来的片段（转义序列跨分片也不会吐半个字符），不是原始 JSON 片段；它只是"正在生成"的预览，最终回答仍以 `final` 里经服务端校验的 `run.output.content` 为准，客户端收到 `final` 后应当用正式卡片替换预览。模型通道不支持流式（或没有 `stream: true` 能力）时不会有 `delta` 事件，属预期降级。
+- `final`：`{run, proposal?}`，与一次性 JSON 契约同一份载荷。
+- `error`：响应头已发出后失败时的唯一表达方式，`{code, message, fields?}` 与普通 HTTP 通道共用同一份错误映射。
+
+非流式请求（不带 `stream=1`）保持原有一次性 `201 application/json` 契约不变；企业微信等通道继续走该路径。
+
+领域事件名（异步/审计侧）沿用：run.started / retrieval.completed / response.delta / proposal.created / confirmation.required / tool.started / tool.completed / run.completed / run.failed。
 
 ### 确认
 

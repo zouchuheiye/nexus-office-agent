@@ -265,4 +265,49 @@ describe("P2 amendable proposal preview", () => {
     outsider.actorId = "another-actor";
     await expect(orchestrator.amendProposal(outsider, original.id, original.proposalHash, original.input)).rejects.toThrow("PROPOSAL_NOT_FOUND");
   });
+
+  it("token 级流式：增量按顺序给出，拼接结果与最终回答一致", async () => {
+    const { orchestrator } = fixture(new FakeModelGateway("接口延迟正在压缩灰度验证窗口，建议先缩小灰度范围。"));
+    const context = createDevelopmentRequestContext("stream-delta");
+    const deltas: Array<{ text: string; round: number }> = [];
+    const stages: string[] = [];
+    const run = await orchestrator.createRun(context, { message: "分析当前项目风险" }, {
+      onStage: (stage) => stages.push(stage.stage),
+      onDelta: (delta) => deltas.push({ text: delta.text, round: delta.round }),
+    });
+
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(deltas.map((item) => item.text).join("")).toBe(run.output?.content);
+    expect(deltas.every((item) => item.round === 1)).toBe(true);
+    expect(deltas.every((item) => item.text.length > 0)).toBe(true);
+    // 阶段事件仍然照常上报（流式是附加能力，不替代阶段进度）。
+    expect(stages).toEqual(expect.arrayContaining(["classification", "context", "thinking", "answer"]));
+  });
+
+  it("没有人监听或模型通道不支持流式时不走流式（保持整段调用）", async () => {
+    const { orchestrator } = fixture(new FakeModelGateway("整段回答"));
+    const context = createDevelopmentRequestContext("stream-none");
+
+    // 1) 没有 onDelta：即使网关有 completeStream 也不调用它。
+    const noListener = await orchestrator.createRun(context, { message: "分析当前项目风险" }, { onStage: () => undefined });
+    expect(noListener.output?.content).toBe("整段回答");
+
+    // 2) 只有 complete 的网关：给了 onDelta 也没有增量，但运行照常成功。
+    const legacyOnly: ModelGateway = { async complete() { return { content: JSON.stringify({ answer: "旧通道回答" }), provider: "legacy", model: "legacy", inputTokens: 1, outputTokens: 1, latencyMs: 1 }; } };
+    const { orchestrator: legacy } = fixture(legacyOnly);
+    const deltas: string[] = [];
+    const run = await legacy.createRun(context, { message: "分析当前项目风险" }, { onDelta: (delta) => deltas.push(delta.text) });
+    expect(deltas).toEqual([]);
+    expect(run.output?.content).toBe("旧通道回答");
+  });
+
+  it("流式预览的异常不影响运行结果", async () => {
+    const { orchestrator } = fixture(new FakeModelGateway("预览抛错也要有结果"));
+    const context = createDevelopmentRequestContext("stream-throwing");
+    const run = await orchestrator.createRun(context, { message: "分析当前项目风险" }, {
+      onDelta: () => { throw new Error("CLIENT_DISCONNECTED"); },
+    });
+    expect(run.status).toBe("succeeded");
+    expect(run.output?.content).toBe("预览抛错也要有结果");
+  });
 });

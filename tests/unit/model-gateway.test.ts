@@ -69,3 +69,92 @@ describe("OpenAI-compatible model gateway failure classification", () => {
     expect(response.outputTokens).toBe(4);
   });
 });
+
+/** 造一个 OpenAI 兼容的 SSE 响应体（按行切成若干分片，模拟网络分包）。 */
+function sseResponse(chunks: string[], options: { sliceSize?: number } = {}) {
+  const payload = chunks.map((chunk) => `data: ${chunk}\n\n`).join("") + "data: [DONE]\n\n";
+  const size = options.sliceSize ?? payload.length;
+  const parts: string[] = [];
+  for (let index = 0; index < payload.length; index += size) parts.push(payload.slice(index, index + size));
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder();
+      for (const part of parts) controller.enqueue(encoder.encode(part));
+      controller.close();
+    },
+  });
+  return { ok: true, status: 200, body: stream };
+}
+
+describe("OpenAI-compatible model gateway streaming", () => {
+  it("边收边报文本增量，并把分片拼成与非流式一致的响应", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      JSON.stringify({ choices: [{ delta: { content: "{\"answer\":\"正在" } }] }),
+      JSON.stringify({ choices: [{ delta: { content: "压缩灰度" } }] }),
+      JSON.stringify({ choices: [{ delta: { content: "窗口。\"}" } }], usage: { prompt_tokens: 9, completion_tokens: 7 } }),
+    ], { sliceSize: 37 })));
+    const gateway = new OpenAICompatibleModelGateway("key", "https://model.example/v1", "test-model");
+    const deltas: string[] = [];
+    const response = await gateway.completeStream(request(), (chunk) => deltas.push(chunk));
+
+    expect(deltas.join("")).toBe("{\"answer\":\"正在压缩灰度窗口。\"}");
+    expect(response.content).toBe("{\"answer\":\"正在压缩灰度窗口。\"}");
+    expect(response.provider).toBe("openai-compatible");
+    expect(response.inputTokens).toBe(9);
+    expect(response.outputTokens).toBe(7);
+  });
+
+  it("按 index 累积分片到达的工具调用参数", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call-1", function: { name: "work.find_task", arguments: "{\"que" } }] } }] }),
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "ry\":\"巡检\"}" } }] } }] }),
+    ])));
+    const gateway = new OpenAICompatibleModelGateway("key", "https://model.example/v1", "test-model");
+    const response = await gateway.completeStream(request("internal", true), () => undefined);
+
+    expect(response.content).toBe("");
+    expect(response.toolCalls).toEqual([{ id: "call-1", name: "work.find_task", arguments: { query: "巡检" } }]);
+  });
+
+  it("服务端不接受 stream 参数时退回非流式调用（没流出内容才回退）", async () => {
+    const responses = [
+      () => ({ ok: false, status: 400, json: async () => ({}) }),
+      () => okResponse({ choices: [{ message: { content: "{\"answer\":\"兜底成功\"}" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+    ];
+    const fetchMock = vi.fn(async () => responses.shift()!());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const gateway = new OpenAICompatibleModelGateway("key", "https://model.example/v1", "test-model");
+    const deltas: string[] = [];
+    const response = await gateway.completeStream(request(), (chunk) => deltas.push(chunk));
+
+    expect(response.content).toBe("{\"answer\":\"兜底成功\"}");
+    expect(deltas).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("已经流出内容后再出错不重试（避免同一段话生成两遍）", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "半句话" } }] })}\n\n`));
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        controller.error(new Error("socket closed"));
+      },
+    });
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, body: stream }));
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = new OpenAICompatibleModelGateway("key", "https://model.example/v1", "test-model");
+    const deltas: string[] = [];
+
+    await expect(gateway.completeStream(request(), (chunk) => deltas.push(chunk))).rejects.toThrow("MODEL_PROVIDER_UNAVAILABLE");
+    expect(deltas.join("")).toBe("半句话");
+    // 已流出内容后不再发起第二次请求。
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("流里既没有文本也没有工具调用时按响应非法处理", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([JSON.stringify({ choices: [{ delta: {} }] })])));
+    const gateway = new OpenAICompatibleModelGateway("key", "https://model.example/v1", "test-model");
+    await expect(gateway.completeStream(request(), () => undefined)).rejects.toThrow("MODEL_RESPONSE_INVALID");
+  });
+});
