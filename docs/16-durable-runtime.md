@@ -254,7 +254,7 @@ Agent 回复必须区分：
 `0.12.0-durable-runtime` 至少提供四种同源制品：
 
 - Web/API Runner。
-- Inbox/Agent/Outbox Worker Runner，可按角色独立部署和伸缩；`WORKER_ROLES` 还支持 `pi-change-delivery`（变更交付 Outbox）与 `task-reminder`（每租户周期内依次执行：周期进度摘要 → 通知留存清理 → 临期/逾期/阻塞提醒扫描，见 [work-command-center](./18-work-command-center.md) §4.4 与 §4.7；留存口径由 `TASK_NOTIFICATION_RETENTION_*` 配置，默认清理 90 天前的已读通知与 365 天前的全部通知）。未列出的角色值一律 `WORKER_ROLE_INVALID` 失败关闭；`pi-runner` 必须使用专用入口。
+- Inbox/Agent/Outbox Worker Runner，可按角色独立部署和伸缩；`WORKER_ROLES` 还支持 `pi-change-delivery`（变更交付 Outbox）、`task-reminder`（每租户周期内依次执行：周期进度摘要 → 通知留存清理 → 临期/逾期/阻塞提醒扫描，见 [work-command-center](./18-work-command-center.md) §4.4 与 §4.7；留存口径由 `TASK_NOTIFICATION_RETENTION_*` 配置，默认清理 90 天前的已读通知与 365 天前的全部通知）与 `notification-dispatch`（站内通知 → 飞书/钉钉/企微的外部投递，见 §4.8；默认关闭，只有 `TASK_NOTIFICATION_CHANNELS=enabled` 才启用，且要求收件人身份已验证、连接 active、本人在偏好里显式 opt-in）。未列出的角色值一律 `WORKER_ROLE_INVALID` 失败关闭；`pi-runner` 必须使用专用入口。
 - Migration Runner。
 - Backup/Restore Operations Runner。
 

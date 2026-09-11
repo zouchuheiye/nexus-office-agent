@@ -4,6 +4,11 @@ import { getAgentOrchestrator, getAgentToolRegistry } from "@/src/modules/agent/
 import { PostgresEventStore } from "@/src/modules/events/infrastructure/postgres-event-store";
 import { AgentChannelActionHandler } from "@/src/modules/integration/application/channel-action-handler";
 import { createIdentityConnectorRegistry, PostgresChannelActorContextResolver } from "@/src/modules/integration/infrastructure/postgres-identity-control-plane";
+import { TaskNotificationChannelDispatcher, taskNotificationChannelOptionsFromEnv } from "@/src/modules/integration/application/task-notification-channel";
+import { DEFAULT_TASK_NOTIFICATION_DISPATCH_OPTIONS, TaskNotificationDispatchWorker } from "@/src/modules/integration/application/task-notification-dispatch-worker";
+import { PostgresChannelPreferenceDirectory, PostgresChannelRecipientDirectory, PostgresTaskNotificationChannelSource } from "@/src/modules/integration/infrastructure/postgres-task-notification-channel";
+import { RuntimeTaskNotificationChannelSender } from "@/src/modules/integration/infrastructure/task-notification-channel-sender";
+import { PostgresNotificationDeliveryStore } from "@/src/modules/integration/infrastructure/postgres-notification-store";
 import { getManagementLoopService } from "@/src/modules/management-loop/runtime";
 import { getTaskCommandService } from "@/src/modules/task-command/runtime";
 import { DEFAULT_TASK_REMINDER_OPTIONS, TaskReminderWorker } from "@/src/modules/task-command/application/reminder-worker";
@@ -40,7 +45,8 @@ import type { WorkerRole } from "@/src/platform/workers/contracts";
 
 function workerRoles(value = process.env.WORKER_ROLES ?? "inbox,agent,outbox"): WorkerRole[] {
   const roles = [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
-  if (roles.some((role) => role !== "inbox" && role !== "agent" && role !== "outbox" && role !== "pi-change-delivery" && role !== "task-reminder")) {
+  const known: WorkerRole[] = ["inbox", "agent", "outbox", "pi-change-delivery", "task-reminder", "notification-dispatch"];
+  if (roles.some((role) => !known.includes(role as WorkerRole))) {
     if (roles.includes("pi-runner")) throw new Error("PI_RUNNER_REQUIRES_DEDICATED_ENTRYPOINT");
     throw new Error("WORKER_ROLE_INVALID");
   }
@@ -119,6 +125,23 @@ export function createDurableWorkerRuntime() {
         enabled: process.env.TASK_SUMMARY_ENABLED !== "false",
         scope: process.env.TASK_SUMMARY_SCOPE === "weekly" ? "weekly" : "daily",
       },
+    }));
+  }
+  if (roles.includes("notification-dispatch")) {
+    // 外部通道投递是独立角色：默认关闭，开启后也只投"用户显式 opt-in 且身份已验证"的通知。
+    const channelOptions = taskNotificationChannelOptionsFromEnv();
+    const deliveryStore = new PostgresNotificationDeliveryStore(database);
+    const dispatcher = new TaskNotificationChannelDispatcher(
+      new PostgresTaskNotificationChannelSource(database),
+      new PostgresChannelRecipientDirectory(database),
+      new PostgresChannelPreferenceDirectory(database),
+      new RuntimeTaskNotificationChannelSender(deliveryStore),
+      channelOptions,
+    );
+    workers.set("notification-dispatch", new TaskNotificationDispatchWorker(dispatcher, {
+      intervalMs: positiveInteger(process.env.TASK_NOTIFICATION_CHANNEL_INTERVAL_MS, DEFAULT_TASK_NOTIFICATION_DISPATCH_OPTIONS.intervalMs),
+      timeoutMs: positiveInteger(process.env.TASK_NOTIFICATION_CHANNEL_TIMEOUT_MS, DEFAULT_TASK_NOTIFICATION_DISPATCH_OPTIONS.timeoutMs),
+      enabled: channelOptions.enabled,
     }));
   }
   const enabled = roles.map((role) => workers.get(role)!);

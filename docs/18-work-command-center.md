@@ -202,6 +202,19 @@ flowchart LR
 - **开关与口径**：`TASK_NOTIFICATION_RETENTION_ENABLED=false` 整条链路关闭（服务此刻连库都不查）；`TASK_NOTIFICATION_RETENTION_DAYS`、`TASK_NOTIFICATION_MAX_AGE_DAYS`、`TASK_NOTIFICATION_RETENTION_BATCH` 覆盖默认值。环境变量到策略的映射只有一处（`notificationRetentionOptionsFromEnv`），常驻 Worker 与脚本共用，避免两条路径各写一套默认值。
 - **不是业务入口**：清理没有 HTTP 也没有 Agent 工具——"删数据"不是同事的业务动作，只由后台调度与运维脚本执行，且严格限定在调用租户内（RLS + `tenant_id` 谓词双重限定）。
 
+### 4.8 外部通道投递（飞书/钉钉/企微）与通知偏好
+
+站内通知之外，还可以把任务通知推到企业 IM。**默认关闭**，而且即使打开也要求收件人**显式 opt-in**——外部通道最容易变成打扰，因此绝不"绑定了身份就默认发"。
+
+- **开关**：`TASK_NOTIFICATION_CHANNELS=enabled` 才启用（未设置即关闭）。关闭时 worker 连租户扫描都不做。`TASK_NOTIFICATION_CHANNEL_LOOKBACK_MINUTES`（默认 60）、`TASK_NOTIFICATION_CHANNEL_BATCH`（默认 50）、`NEXUS_WEB_BASE_URL`（消息里的"在网页中查看"深链）可调。
+- **谁触发**：独立 Durable Worker 角色 `notification-dispatch`（`WORKER_ROLES=notification-dispatch npm run worker`，`0052` 迁移放宽 `worker_heartbeats.role`）。它与 `task-reminder` 分开部署：提醒是平台内部的时间/状态推导，外部投递要碰企业凭据与第三方限流，混在一个角色里会让排障与限流互相牵连。按租户做间隔节流（`TASK_NOTIFICATION_CHANNEL_INTERVAL_MS`，默认 5 分钟），失败不推进节流时间以便立即重试。
+- **候选范围**：最近 `lookbackMinutes` 分钟内产生的站内通知（服务端按 `created_at` 窗口 + `LIMIT` 取，单租户单轮有上限）。因此不新增"是否已投递"的列——**跨周期重复由投递台账兜住**：投递键是 `task-notification:<通知 ID>`，落到 `connector_deliveries(tenant_id, notification_id)` 唯一约束上，已成功的通知不会再发一次。
+- **三重门槛**（缺一不发）：① 收件人绑定了外部身份且**身份已验证**；② 该身份所在连接状态为 `active`；③ 用户的偏好里显式包含这个通道。对应的跳过原因会写进 worker 日志的 `reasons`（`NO_BOUND_CHANNEL` / `CHANNEL_NOT_OPTED_IN`）。
+- **免打扰**：偏好里设了 `quiet_hours`（`{ start, end, timezoneOffsetMinutes }`，支持跨午夜）时，命中的通知本轮记为 `deferred: QUIET_HOURS` 不投递，留在扫描窗口里等下一轮。
+- **换通道策略**：按偏好顺序依次尝试；**只有已知不可重试的失败**（连接未配置、凭据缺失、目标不存在等）才换下一个通道。限流（`RATE_LIMITED`）与"结果未知"一律不换——第一条其实可能已经发出去了，换通道再发就是重复打扰。限流会按 `next_attempt_at` 排定重试，重试时间之前不会重发。
+- **凭据与失败关闭**：出站凭据与传输是按**连接**配置的（`AuthenticatedConnectorTransport` + `AccessTokenBroker` + 环境凭据），因此每个目标连接单独构造连接器；没有配好凭据时投递以 `CONFIG_REQUIRED:*` / `UNCONFIGURED` 失败并记进台账，而不是崩掉 worker，也不会"假装成功"。
+- **偏好入口**：`GET /api/v1/me/channel-preferences` 读取、`PUT` 覆盖本人偏好（`orderedProviders` 同时是投递顺序与 opt-in 名单，默认 `["web"]`；`quietHours` 传 `null` 清空，不传则保留；`digestEnabled` 透传保留）。只作用于**本人**：schema 是 strict 的，带 `userId` 之类的多余字段直接 422，没有"管理员替别人设通道"的入口。设置界面（成员自助页）仍待产品排期，目前可用接口或直接写 `channel_preferences` 表。
+
 ## 5. HTTP 契约
 
 | 方法 | 路径 | 作用 |
@@ -224,6 +237,7 @@ flowchart LR
 | `GET` | `/api/v1/task-command/notifications` | 只读本人站内通知与未读数（`unreadOnly`/`limit`） |
 | `POST` | `/api/v1/task-command/notifications/{id}/read` | 标记本人一条通知已读（幂等） |
 | `POST` | `/api/v1/task-command/notifications/read-all` | 一键把本人未读清空 |
+| `GET` / `PUT` | `/api/v1/me/channel-preferences` | 读取/覆盖**本人**通知通道偏好（通道顺序即 opt-in 名单，含免打扰窗口） |
 | `POST` | `/api/v1/task-command/message-pools/messages` | 直接发布一条公司/部门消息，不创建任务 |
 | `POST` | `/api/v1/task-command/message-pools/messages/{id}/feedback` | 对可见消息补充反馈，不改变业务状态 |
 | `GET` | `/api/v1/task-command/message-events` | 可恢复的消息池刷新事件流 |
