@@ -61,6 +61,12 @@ const errorRules: ErrorRule[] = [
   { match: codes(["ORGANIZATION_CHANGE_NOT_EFFECTIVE"]), status: 409, message: "组织异动尚未到生效时间，当前不能执行交接。" },
   { match: codes(["PROJECT_CODE_CONFLICT"]), status: 409, message: "项目编码已存在，请使用新的唯一编码。" },
   { match: (code) => code.startsWith("PROPOSAL_NOT_SUPERSEDABLE:") || code === "PROPOSAL_AMEND_NO_CHANGE", status: 409, message: "提案已确认、执行或内容未变化，不能重复修正；如需调整请发起新动作。" },
+  // 企业信息库（E-161）：上传/下载相关的错误必须排在通用规则之前，否则 "_REQUIRED" 会被误判成状态冲突。
+  { match: codes(["DOCUMENT_FILE_REQUIRED", "DOCUMENT_UPLOAD_REQUIRES_MULTIPART", "DOCUMENT_FILE_TYPE_NOT_ALLOWED", "DOCUMENT_FILE_NAME_INVALID", "DOCUMENT_VERSION_INVALID", "DOCUMENT_CONTENT_REQUIRED", "DOCUMENT_EFFECTIVE_TIME_INVALID", "DOCUMENT_EXPIRY_INVALID", "FILE_EMPTY"]), status: 422, message: "文件或条目内容不符合约束：请检查必填字段、文件类型、版本号与生效/失效时间。" },
+  { match: codes(["DOCUMENT_FILE_TOO_LARGE"]), status: 413, message: "文件超过单文件 25MB 上限；请压缩后再上传，或把大文件放在企业网盘并在条目里登记引用。" },
+  { match: codes(["FILE_STORAGE_NOT_CONFIGURED", "FILE_STORAGE_MEMORY_FORBIDDEN_IN_PRODUCTION"]), status: 503, message: "文件存储尚未配置（生产环境必须显式设置存储根目录），系统已安全关闭文件上传与下载。" },
+  { match: codes(["FILE_OBJECT_NOT_FOUND", "FILE_OBJECT_CORRUPTED", "FILE_STORAGE_REF_INVALID", "DOCUMENT_FILE_UNAVAILABLE"]), status: 500, message: "文件字节不可用（缺失或摘要不匹配），已拒绝返回内容；请联系管理员核查存储与备份。" },
+  { match: codes(["DOCUMENT_KIND_MISMATCH"]), status: 409, message: "文本型知识与文件型条目的版本不能混用：请在该条目对应类型的入口追加版本。" },
   { match: codes(["CLIENT_DEVICE_REVOKED", "CLIENT_PUSH_DISABLED"]), status: 409, message: "客户端设备已撤销或当前策略不允许该能力。" },
   { match: (code) => code.includes("INVALID_TRANSITION") || code.includes("CANNOT_") || code.includes("_REQUIRED") || code.includes("_PENDING") || code.includes("_LOCKED") || code.includes("_CONFLICT") || code.includes("_CHAIN_CHANGED") || code.includes("_NOT_PENDING") || code.includes("_NOT_ACTIVE") || code.includes("_VERSION_MISSING") || code.includes("MIXED_ARTIFACT_REFERENCES"), status: 409, message: "当前业务状态不允许该操作。" },
 ];

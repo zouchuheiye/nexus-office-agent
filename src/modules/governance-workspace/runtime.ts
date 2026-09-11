@@ -11,6 +11,7 @@ import { WorkflowService } from "@/src/modules/workflow/application/service";
 import { getDevelopmentWorkflowRepository } from "@/src/modules/workflow/infrastructure/in-memory-repository";
 import { PostgresWorkflowRepository } from "@/src/modules/workflow/infrastructure/postgres-repository";
 import { createPostgresDatabase } from "@/src/platform/database/postgres";
+import { createFileObjectStore } from "@/src/platform/storage/file-store";
 import { moduleRuntime } from "@/src/platform/runtime/module-runtime";
 
 type GovernanceRuntime = {
@@ -25,7 +26,7 @@ export function getGovernanceRuntime(): GovernanceRuntime {
   return moduleRuntime("governance-workspace", runtimeGeneration, () => {
     if (process.env.DATABASE_URL) {
       const database = createPostgresDatabase(process.env.DATABASE_URL);
-      const knowledge = new KnowledgeService(new PostgresKnowledgeRepository(database));
+      const knowledge = new KnowledgeService(new PostgresKnowledgeRepository(database), () => new Date(), createFileObjectStore());
       return {
         workflow: new WorkflowService(new PostgresWorkflowRepository(database), new PostgresEventStore(database)),
         knowledge,
@@ -33,7 +34,7 @@ export function getGovernanceRuntime(): GovernanceRuntime {
       };
     }
     const events = new InMemoryEventStore();
-    const knowledge = new KnowledgeService(getDevelopmentKnowledgeRepository());
+    const knowledge = new KnowledgeService(getDevelopmentKnowledgeRepository(), () => new Date(), createFileObjectStore());
     return {
       workflow: new WorkflowService(getDevelopmentWorkflowRepository(), events),
       knowledge,

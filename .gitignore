@@ -20,3 +20,6 @@ out/
 docs/19-vastmind-wecom-rollout.md
 deploy/single-host/vastmind-office.nginx
 public/brand/vastmind-wecom-icon*.png
+
+# 企业信息库的本地文件存储（开发默认目录，运行态数据）
+.nexus-files/

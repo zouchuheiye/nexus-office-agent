@@ -68,11 +68,11 @@ export class InMemoryKnowledgeRepository implements KnowledgeRepository {
     const content = "客户数据按公开、内部、机密、受限四级管理。受限数据不得进入公共模型。生产数据导出必须由数据负责人和安全负责人共同批准，并保留审计记录。";
     const access = {
       ownerId: DEMO_MANAGER_ID, classification: "confidential" as const,
-      allowedUserIds: [], allowedRoleCodes: ["enterprise_manager"], projectIds: [DEMO_PROJECT_ID], agentIndexingAllowed: true,
+      allowedUserIds: [], allowedRoleCodes: ["enterprise_manager"], projectIds: [DEMO_PROJECT_ID], allowedOrgUnitIds: [], allowedPositionNames: [], agentIndexingAllowed: true,
     };
     const document: Document = {
       id: DEMO_DOCUMENT_ID, tenantId: DEMO_TENANT_ID, title: "客户数据安全分级制度",
-      ownerId: DEMO_MANAGER_ID, classification: "confidential", status: "published", currentVersion: 1,
+      ownerId: DEMO_MANAGER_ID, classification: "confidential", status: "published", currentVersion: 1, kind: "text", category: "policy", summary: "客户数据的四级分级与导出审批要求。",
       access, version: 1,
     };
     const contentDigest = createHash("sha256").update(content).digest("hex");

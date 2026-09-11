@@ -32,7 +32,7 @@ describe("Postgres workflow, meeting and knowledge repositories", () => {
 
   beforeEach(async () => {
     database = new PGlite();
-    for (const file of ["0001_foundation.sql","0002_management_loop.sql","0003_agent_platform.sql","0004_connector_platform.sql","0005_workflow_knowledge.sql","0006_strategy_organization_talent.sql","0043_workflow_meeting_knowledge_completion.sql"]) {
+    for (const file of ["0001_foundation.sql","0002_management_loop.sql","0003_agent_platform.sql","0004_connector_platform.sql","0005_workflow_knowledge.sql","0006_strategy_organization_talent.sql","0043_workflow_meeting_knowledge_completion.sql","0053_enterprise_file_library.sql"]) {
       await database.exec(await readFile(path.resolve("src/platform/database/migrations", file), "utf8"));
     }
     const executor: DatabaseExecutor = {

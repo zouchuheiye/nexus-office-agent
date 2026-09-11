@@ -25,6 +25,23 @@ export class MemberDirectoryService {
     return { ...directory, canManage };
   }
 
+  /**
+   * E-161：把**当前主体**解析成"适用范围"判据（部门 + 岗位名）。
+   *
+   * 只查自己，因此不需要人事管理权限；查不到（例如新入职还没建任职）就返回空数组，
+   * 由调用方按"不匹配"处理——外部文件不该因为解析不到组织信息就变成人人可见。
+   * 岗位目前用**名称**匹配：成员目录对外暴露的就是岗位名（`positionName`），等岗位 ID 在更广的
+   * 读模型里稳定后再升级为 ID 匹配（届时要同时回填历史文件条目）。
+   */
+  async actorApplicability(context: RequestContext): Promise<{ orgUnitIds: string[]; positionNames: string[] }> {
+    const member = await this.repository.get(context.tenantId, context.actorId);
+    if (!member) return { orgUnitIds: [], positionNames: [] };
+    return {
+      orgUnitIds: member.orgUnitId ? [member.orgUnitId] : [],
+      positionNames: member.positionName ? [member.positionName] : [],
+    };
+  }
+
   async createMember(context: RequestContext, input: CreateMemberInput) {
     requirePermission(context, "organization_member:admin");
     const member = createMemberProfile({ id: randomUUID(), ...input });

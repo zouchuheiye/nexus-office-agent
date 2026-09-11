@@ -49,6 +49,8 @@ type RequestContext = {
 /portfolios /projects /milestones /tasks
 /risks /issues /decisions /action-items
 /meetings /documents /knowledge/search
+/knowledge/documents /knowledge/documents/files /knowledge/documents/:id
+/knowledge/documents/:id/versions /knowledge/documents/:id/versions/:version/content
 /process-definitions /process-instances /approvals
 /agent/runs /agent/proposals /confirmations
 /agent/proposals/:id /agent/proposals/:id/confirm /agent/proposals/:id/amend
@@ -85,6 +87,17 @@ R3 提案（可编辑预览卡）：`GET /agent/proposals/:id` 返回本人可�
 站内通知（P4）：`GET /task-command/notifications?unreadOnly=&limit=` 返回当前主体自己的通知与未读数（`{notifications, unreadCount}`，收件人恒为会话身份，**不接受客户端指定他人**，`limit` 1–100 默认 30）；`POST /task-command/notifications/:id/read` 标记本人一条已读（幂等，不覆盖更早的 `read_at`）；`POST /task-command/notifications/read-all` 一键把本人未读清空。读取需 `work_task:read`。九类通知来自任务链路的真实事件——`task_assigned`（定向分派给某人）、`task_claimed`（公开承接被他人领取，通知发布人）、`handoff_requested`（待对方签收）、`handoff_responded`（签收/退回/撤回结果）、`review_requested`（待发布人验收）、`review_decided`（验收通过或被退回，退回原因进正文），以及常驻调度器产生的 `task_due_soon`/`task_overdue`/`task_blocked`（临期、逾期、阻塞升级；见 docs/18 §4.4）；操作人等于收件人时不产生通知，`open_claim` 只挂部门池没有收件人时也不产生通知，子任务勾选不通知（避免噪声）。前六类通知与业务变更、`work_task_events` 审计事件在**同一租户事务**内写入：版本 CAS 冲突或校验失败时既不写事件也不写通知；后三类由后台扫描产生，没有对应的任务事件行，改用 `日期+任务+类型+收件人` 的确定性 `source_event_id` 落到唯一索引上做幂等。定时提醒以 `actor_type/kind='system'`、`actor_id` 为空写入（`work_task_notifications.actor_type`、`work_pool_messages.author_type`、`work_message_events.actor_type`），`CHECK ((actor_type='user') = (actor_id IS NOT NULL))` 保证"系统署名不挂真人、真人署名必须有 ID"。越权（他人通知 ID）与不存在统一返回 `404 WORK_NOTIFICATION_NOT_FOUND`，不泄露存在性。`GET /task-command/workspace` 的载荷同时携带 `notifications`（本人最近 30 条）与 `unreadNotificationCount`，客户端据此渲染未读角标，不需要额外轮询接口。Agent 侧只提供只读工具 `work.list_my_notifications`（R0，无确认），不提供任何通知写工具。
 
 通知通道偏好（P4 外部通道）：`GET /api/v1/me/channel-preferences` 返回**当前主体本人**的偏好视图 `{orderedProviders, quietHours, digestEnabled, updatedAt, configured, availableProviders}`，未设置过时返回默认值（`orderedProviders=["web"]`、`configured=false`）而不是 404；`PUT` 覆盖写入，body 为 `{orderedProviders: ("web"|"feishu"|"dingtalk"|"wecom")[], quietHours?: {start,end,timezoneOffsetMinutes} | null, digestEnabled?: boolean}`，`strict()` 校验（多余字段如 `userId` 直接 422，没有"替他人设通道"的入口），`quietHours` 传 `null` 表示清空、不传表示保留原值。该偏好同时是外部通道的 **opt-in 名单**：默认只含 `web`（站内），只有本人显式加入 IM 通道后，`notification-dispatch` worker 才会把站内通知推到飞书/钉钉/企微（详见 docs/18 §4.8）。偏好变更不影响站内通知的产生与已读语义。
+
+企业信息库（E-161）：同一份"企业信息"底座同时承载**文本知识**与**文件**，靠条目的 `kind` 区分（`text` 有正文并切块进 `knowledge_items`；`file` 的字节在对象存储里、不产生知识条目、因此不会被 Agent 检索）。
+
+- `GET /api/v1/knowledge/documents?category=&kind=&keyword=&applicableOnly=`：列出**当前主体读得到的已发布条目**（服务端过滤，越权条目不出现在响应里），返回 `{id,title,kind,category,summary,classification,currentVersion,applicableTo:{orgUnits,positions,users,roles},agentIndexingAllowed}`。`applicableOnly=true` 只看"有明确适用范围（本人/角色/部门/岗位）"的条目。
+- `POST /api/v1/knowledge/documents`：发布/追加**文本型**条目（原契约不变），新增可选 `category`（`policy|standard|agreement|contract|template|form|certificate|record|other`）、`summary`、`allowedOrgUnitIds`、`allowedPositionNames`。
+- `POST /api/v1/knowledge/documents/files`：`multipart/form-data` 上传**文件型**条目。`file` 字段是字节，其余是元数据（`title`/`category`/`classification`/`summary`/`sourceRef`/`effectiveAt`/`expiresAt`/`agentIndexingAllowed` + 适用范围 `allowedUserIds`/`allowedRoleCodes`/`projectIds`/`allowedOrgUnitIds`/`allowedPositionNames`，多人/多值时用逗号或空格分隔）。返回 201；单文件超过 25MB → `413`，MIME 不在白名单 → `422 DOCUMENT_FILE_TYPE_NOT_ALLOWED`，缺少 `file` → `422 DOCUMENT_FILE_REQUIRED`。
+- `POST /api/v1/knowledge/documents/:id/versions`：同一表单再传一版，保留历史版本与 `supersedesVersion`；只有条目 Owner 或 `document:admin` 可以追加（`POLICY_DENIED:DOCUMENT_OWNER_REQUIRED`）。文本型与文件型不能互相追加（`DOCUMENT_KIND_MISMATCH`）。
+- `GET /api/v1/knowledge/documents/:id`：详情，含版本历史（文件名/MIME/大小/摘要/生效期/发布人）与 `accessBasis`（本次为什么能看：`owner`/`explicit_user`/`role`/`project`/`org_unit`/`position`/`classification`）。
+- `GET /api/v1/knowledge/documents/:id/versions/:version/content`：下载字节（`?inline=1` 用于预览）。响应带 `content-type`、`x-content-digest`、`content-disposition`（RFC 5987 支持中文文件名）与 `cache-control: private, no-store`；越权与不存在统一 `404`。文件存储未配置时 `503 FILE_STORAGE_NOT_CONFIGURED`（失败关闭）。
+
+可见性口径：密级 `public`/`internal` 对全员可读；`confidential`/`restricted` 必须命中本人（Owner 或显式用户）、角色、项目、**部门**或**岗位**之一。部门/岗位判据由请求侧按当前主体解析后传入，解析不到即视为不匹配（失败关闭），不会因为"查不到组织信息"而放宽成人人可见。
 
 会议确认转化的决定保存 `sourceMeetingId`，服务端校验来源会议和决定属于同一租户、同一项目；行动项通过 `decisionId` 关联该决定。知识搜索只返回当前已生效且未过期版本，并在引用中返回原始 `sourceRef`、版本定位、有效时间和不泄露 ACL 明细的 `accessBasis`。
 

@@ -7,27 +7,47 @@ const asText = (value: unknown) => value instanceof Date ? value.toISOString() :
 const optionalText = (value: unknown) => value === null || value === undefined ? undefined : asText(value);
 function json<T>(value: unknown): T { return (typeof value === "string" ? JSON.parse(value) : value) as T; }
 
+/** 老数据（0053 之前写入的 access_policy）没有适用范围字段，读取时补齐成空数组而不是让判定崩掉。 */
+function mapAccess(value: unknown): DocumentAccess {
+  const access = json<Partial<DocumentAccess> & { classification?: DocumentAccess["classification"] }>(value) ?? {};
+  return {
+    ownerId: asText(access.ownerId ?? ""),
+    classification: (access.classification ?? "internal") as DocumentAccess["classification"],
+    allowedUserIds: access.allowedUserIds ?? [],
+    allowedRoleCodes: access.allowedRoleCodes ?? [],
+    projectIds: access.projectIds ?? [],
+    allowedOrgUnitIds: access.allowedOrgUnitIds ?? [],
+    allowedPositionNames: access.allowedPositionNames ?? [],
+    agentIndexingAllowed: access.agentIndexingAllowed ?? false,
+  };
+}
+
 function mapDocument(row: Row): Document {
   return {
     id: asText(row.id), tenantId: asText(row.tenant_id), title: asText(row.title), ownerId: asText(row.owner_id),
     classification: row.classification as Document["classification"], status: row.status as Document["status"],
-    currentVersion: Number(row.current_version), access: json<DocumentAccess>(row.access_policy), version: Number(row.version),
+    currentVersion: Number(row.current_version), access: mapAccess(row.access_policy), version: Number(row.version),
+    kind: (row.kind as Document["kind"]) ?? "text", category: (row.category as Document["category"]) ?? "policy",
+    summary: optionalText(row.summary),
   };
 }
 function mapVersion(row: Row): DocumentVersion {
   return {
     id: asText(row.id), tenantId: asText(row.tenant_id), documentId: asText(row.document_id), version: Number(row.version),
-    content: asText(row.content), contentDigest: asText(row.content_digest), sourceRef: optionalText(row.source_ref),
+    content: row.content === null || row.content === undefined ? "" : asText(row.content),
+    contentDigest: asText(row.content_digest), sourceRef: optionalText(row.source_ref),
     effectiveAt: asText(row.effective_at), expiresAt: optionalText(row.expires_at),
     supersedesVersion: row.supersedes_version == null ? undefined : Number(row.supersedes_version),
     publishedBy: asText(row.published_by), publishedAt: asText(row.published_at),
+    fileName: optionalText(row.file_name), mediaType: optionalText(row.media_type),
+    sizeBytes: row.size_bytes == null ? undefined : Number(row.size_bytes), storageRef: optionalText(row.storage_ref),
   };
 }
 function mapItem(row: Row): KnowledgeItem {
   return {
     id: asText(row.id), tenantId: asText(row.tenant_id), documentId: asText(row.document_id), documentVersion: Number(row.document_version),
     chunkIndex: Number(row.chunk_index), content: asText(row.content), locator: asText(row.locator),
-    permissionSnapshot: json<DocumentAccess>(row.permission_snapshot), status: row.status as KnowledgeItem["status"],
+    permissionSnapshot: mapAccess(row.permission_snapshot), status: row.status as KnowledgeItem["status"],
     contentDigest: asText(row.content_digest),
   };
 }
@@ -56,15 +76,15 @@ export class PostgresKnowledgeRepository implements KnowledgeRepository {
     await this.database.withTenant(document.tenantId, async (executor) => {
       await executor.query("UPDATE knowledge_items SET status='invalidated',invalidated_at=now() WHERE tenant_id=$1 AND document_id=$2 AND status='active'", [document.tenantId,document.id]);
       await executor.query(
-        `INSERT INTO documents(id,tenant_id,title,owner_id,classification,status,current_version,access_policy,version)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
-         ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,classification=EXCLUDED.classification,status=EXCLUDED.status,current_version=EXCLUDED.current_version,access_policy=EXCLUDED.access_policy,version=EXCLUDED.version,updated_at=now()`,
-        [document.id,document.tenantId,document.title,document.ownerId,document.classification,document.status,document.currentVersion,document.access,document.version],
+        `INSERT INTO documents(id,tenant_id,title,owner_id,classification,status,current_version,access_policy,version,kind,category,summary)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,classification=EXCLUDED.classification,status=EXCLUDED.status,current_version=EXCLUDED.current_version,access_policy=EXCLUDED.access_policy,version=EXCLUDED.version,kind=EXCLUDED.kind,category=EXCLUDED.category,summary=EXCLUDED.summary,updated_at=now()`,
+        [document.id,document.tenantId,document.title,document.ownerId,document.classification,document.status,document.currentVersion,document.access,document.version,document.kind,document.category,document.summary ?? null],
       );
       await executor.query(
-        `INSERT INTO document_versions(id,tenant_id,document_id,version,content,content_digest,source_ref,effective_at,expires_at,supersedes_version,published_by,published_at)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [version.id,version.tenantId,version.documentId,version.version,version.content,version.contentDigest,version.sourceRef ?? null,version.effectiveAt,version.expiresAt ?? null,version.supersedesVersion ?? null,version.publishedBy,version.publishedAt],
+        `INSERT INTO document_versions(id,tenant_id,document_id,version,content,content_digest,source_ref,effective_at,expires_at,supersedes_version,published_by,published_at,file_name,media_type,size_bytes,storage_ref)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        [version.id,version.tenantId,version.documentId,version.version,version.content ? version.content : null,version.contentDigest,version.sourceRef ?? null,version.effectiveAt,version.expiresAt ?? null,version.supersedesVersion ?? null,version.publishedBy,version.publishedAt,version.fileName ?? null,version.mediaType ?? null,version.sizeBytes ?? null,version.storageRef ?? null],
       );
       for (const item of items) await executor.query(
         `INSERT INTO knowledge_items(id,tenant_id,document_id,document_version,chunk_index,content,locator,permission_snapshot,status,content_digest)

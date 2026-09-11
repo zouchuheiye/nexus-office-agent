@@ -42,6 +42,19 @@ docker build --target operations -t registry.example.com/nexus-office-operations
 
 上线前在“系统与集成”页依次执行 `POST /api/v1/integrations/acceptance/identity`、三个连接器预检与 `GET /api/v1/integrations/acceptance`证据复核。只有状态为 `active`、最新预检全通过且已绑定明确外部企业 ID 的连接，才会开放测试通知确认区。管理员先调用 `POST /api/v1/integrations/test-notifications` 生成方案，再使用 `POST /api/v1/integrations/test-notifications/{id}/confirm` 确认；绝不跳过第一阶段，也不在未知结果后再次点击。
 
+## 4.1 企业信息库的文件存储（E-161）
+
+企业信息库可以把协议、标准、表单、证照等文件按内容寻址存起来。文件字节的存放是**部署必答题**：
+
+- `NEXUS_FILE_STORAGE_ROOT`：文件存储根目录（必填）。开发环境未设置时会落到仓库下的 `.nexus-files/`；
+  **生产未设置则直接抛 `FILE_STORAGE_NOT_CONFIGURED`**（失败关闭），不允许悄悄写到容器临时目录——否则会出现"上传成功、重启即丢"。
+- `NEXUS_FILE_STORAGE_PROVIDER=memory`：仅限非生产的演示/测试（数据不落盘，进程结束即消失）；生产使用会抛 `FILE_STORAGE_MEMORY_FORBIDDEN_IN_PRODUCTION`。
+- 目录布局为 `<root>/<tenantId>/<sha256 前2位>/<sha256 第3-4位>/<sha256>`：按租户隔离、同一份内容只存一份、文件名即摘要。
+  下载前会校验摘要，字节被改动会以 `FILE_OBJECT_CORRUPTED` 拒绝返回。
+- 运维要求：把该目录纳入备份与容量监控（与数据库备份同一个恢复点目标），迁移/扩容时整目录同步；
+  K8s 部署需要给它持久卷（`ReadWriteOnce` 即可，多副本共享请改用对象存储实现并在代码里替换 `FileObjectStore`）。
+- 单文件上限 25MB、MIME 白名单见 `DEFAULT_FILE_LIMITS`；超过上限请把文件放在企业网盘并在条目里登记引用。
+
 ## 5. 生产 Secret 代理契约
 
 应用以固定 HTTPS POST 调用 `SECRET_MANAGER_URL`，使用 bootstrap token 鉴权，请求仅包含不透明 `ref` 和最小化 `purpose`。响应为 `{ "value": ... }`；状态接口、错误和日志均不返回值。连接器解析缓存最长 60 秒，轮换通过移动 `current` 引用完成。
