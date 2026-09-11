@@ -192,6 +192,16 @@ flowchart LR
 - **模型不可用/返回不可解析时仍可用**：退化为"按纪要条目拆候选"，字段全部待补充，由既有"缺字段不阻断"逻辑继续兜底。
 - Agent 侧同一能力为只读工具 `work.draft_tasks_from_minutes`（R0/never），用于对话里"把这段纪要拆成任务"；真正发布仍要经 `work.publish_task_bundle` 的人工确认。
 
+### 4.7 通知的留存清理
+
+站内通知是**投递态**数据，不是业务事实：任务与事件链在 `work_packages` / `work_task_events`（append-only），通知本身对当事人只在短期内有用。不清理的话，按人查询「通知」页签会随分派/承接/交接/验收与每轮临期扫描越来越慢，工作区载荷也越滚越大。
+
+- **两条线**：`readDays`（默认 90 天）清理**已读**通知；`maxAgeDays`（默认 365 天）是**无论已读与否**的硬上限，专门兜住"永远没人点开"的未读通知。硬上限早于读窗口属配置错误，启动即抛 `NOTIFICATION_RETENTION_CONFIG_INVALID`。
+- **按批删除**：每批 `batchSize` 条（默认 500，SQL 用 `WITH doomed AS (SELECT … LIMIT n) DELETE … USING doomed`），单租户单次最多 `maxBatches` 批，避免一次锁住太多行、也避免一个租户拖住整个调度周期。每条被删行都会经 `nexus_atomic_audit_change()` 写入 `audit_events`（`action='database.delete'`），所以"通知没了"这件事本身也是留痕的。`0051` 迁移补了 `(tenant_id, created_at)` 索引——0049 的另外两条索引都带 `recipient_id`，而清理是全租户按时间扫，用不上它们。
+- **谁触发**：常驻 Worker 角色 `task-reminder` 在同一个租户周期里顺带做这件事，按 **UTC 日期**每租户每天最多一次（与提醒的间隔节流、摘要的周期键并列）；失败不推进"今天已做"标记，下个周期立即重试。手工/一次性入口为 `npm run task:notifications:prune`（可带 `--tenant <uuid>`，默认遍历活跃租户）。
+- **开关与口径**：`TASK_NOTIFICATION_RETENTION_ENABLED=false` 整条链路关闭（服务此刻连库都不查）；`TASK_NOTIFICATION_RETENTION_DAYS`、`TASK_NOTIFICATION_MAX_AGE_DAYS`、`TASK_NOTIFICATION_RETENTION_BATCH` 覆盖默认值。环境变量到策略的映射只有一处（`notificationRetentionOptionsFromEnv`），常驻 Worker 与脚本共用，避免两条路径各写一套默认值。
+- **不是业务入口**：清理没有 HTTP 也没有 Agent 工具——"删数据"不是同事的业务动作，只由后台调度与运维脚本执行，且严格限定在调用租户内（RLS + `tenant_id` 谓词双重限定）。
+
 ## 5. HTTP 契约
 
 | 方法 | 路径 | 作用 |

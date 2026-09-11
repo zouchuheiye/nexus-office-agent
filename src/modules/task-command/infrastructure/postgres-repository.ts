@@ -388,6 +388,26 @@ export class PostgresTaskCommandRepository implements TaskCommandRepository {
     });
   }
 
+  /** 留存清理：按批删除超期通知（`onlyRead=false` 时含未读）。审计触发器会为删除留痕。 */
+  async deleteNotifications(tenantId: string, input: { createdBefore: string; onlyRead: boolean; limit: number }) {
+    const limit = Math.min(Math.max(input.limit, 1), 5_000);
+    return this.database.withTenant(tenantId, async (db) => {
+      const rows = await db.query(
+        `WITH doomed AS (
+           SELECT id FROM work_task_notifications
+           WHERE tenant_id=$1 AND created_at < $2 AND ($3::boolean = false OR read_at IS NOT NULL)
+           ORDER BY created_at ASC, id ASC
+           LIMIT $4
+         )
+         DELETE FROM work_task_notifications target USING doomed
+         WHERE target.id = doomed.id AND target.tenant_id = $1
+         RETURNING target.id`,
+        [tenantId, input.createdBefore, input.onlyRead, limit],
+      );
+      return rows.length;
+    });
+  }
+
   async listPoolMessages(tenantId: string) {
     return this.database.withTenant(tenantId, async (db) => (await db.query("SELECT * FROM work_pool_messages WHERE tenant_id=$1 ORDER BY created_at DESC,id DESC", [tenantId])).map(mapPoolMessage));
   }

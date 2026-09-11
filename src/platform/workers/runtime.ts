@@ -7,6 +7,7 @@ import { createIdentityConnectorRegistry, PostgresChannelActorContextResolver } 
 import { getManagementLoopService } from "@/src/modules/management-loop/runtime";
 import { getTaskCommandService } from "@/src/modules/task-command/runtime";
 import { DEFAULT_TASK_REMINDER_OPTIONS, TaskReminderWorker } from "@/src/modules/task-command/application/reminder-worker";
+import { notificationRetentionOptionsFromEnv } from "@/src/modules/task-command/application/notification-retention";
 import { TaskCommandService } from "@/src/modules/task-command/application/service";
 import { PostgresTaskCommandRepository } from "@/src/modules/task-command/infrastructure/postgres-repository";
 import { ManagementChannelActionHandler } from "@/src/modules/management-intelligence/application/channel-action-handler";
@@ -107,7 +108,8 @@ export function createDurableWorkerRuntime() {
   }
   if (roles.includes("task-reminder")) {
     // 复用同一份数据库连接构造服务，避免常驻进程额外开池。
-    const reminders = new TaskCommandService(new PostgresTaskCommandRepository(database));
+    // 留存策略（保留多久/是否启用）只在这里从环境变量映射一次，服务与脚本共用同一份口径。
+    const reminders = new TaskCommandService(new PostgresTaskCommandRepository(database), notificationRetentionOptionsFromEnv());
     workers.set("task-reminder", new TaskReminderWorker(reminders, {
       intervalMs: positiveInteger(process.env.TASK_REMINDER_INTERVAL_MS, DEFAULT_TASK_REMINDER_OPTIONS.intervalMs),
       dueSoonHours: positiveInteger(process.env.TASK_REMINDER_DUE_SOON_HOURS, DEFAULT_TASK_REMINDER_OPTIONS.dueSoonHours),

@@ -1,6 +1,7 @@
 // Requirements: PR-009, PR-010, MR-046, MR-047, MR-048, AC-012, AC-013（P4：定时提醒常驻调度 + 系统署名）
 import { describe, expect, it } from "vitest";
 import { DEFAULT_TASK_REMINDER_OPTIONS, TaskReminderWorker } from "@/src/modules/task-command/application/reminder-worker";
+import { DEFAULT_NOTIFICATION_RETENTION_OPTIONS } from "@/src/modules/task-command/application/notification-retention";
 import { TaskCommandService } from "@/src/modules/task-command/application/service";
 import { DEMO_PRODUCT_OWNER_ID, InMemoryTaskCommandRepository } from "@/src/modules/task-command/infrastructure/in-memory-repository";
 import { createDevelopmentRequestContext, DEMO_MANAGER_ID, DEMO_TENANT_ID } from "@/src/platform/context/development-context";
@@ -184,10 +185,72 @@ describe("P4 定时提醒常驻调度", () => {
     const failing = {
       runScheduledReminderScan: async () => { throw new Error("REMINDER_SCAN_FAILED"); },
       generateScheduledSummary: async () => { throw new Error("SUMMARY_FAILED"); },
+      pruneNotifications: async () => { throw new Error("RETENTION_FAILED"); },
     } as unknown as TaskCommandService;
     const worker = new TaskReminderWorker(failing, options);
     const now = new Date("2026-09-10T09:00:00.000Z");
     expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", now)).toEqual({ role: "task-reminder", status: "failed" });
     expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", new Date(now.getTime() + 1_000))).toEqual({ role: "task-reminder", status: "failed" });
+  });
+
+  it("通知留存清理每租户每天只做一次，删的是真正超期的通知", async () => {
+    const repository = new InMemoryTaskCommandRepository();
+    const service = new TaskCommandService(repository, { ...DEFAULT_NOTIFICATION_RETENTION_OPTIONS, readDays: 30, maxAgeDays: 365, batchSize: 10 });
+    const publisher = createDevelopmentRequestContext("retention-worker");
+    const conversation = (await service.workspace(publisher)).conversation;
+    const task = await publishDueTask(service, publisher, conversation.id, "2026-09-11T10:00:00.000Z");
+    const seedNotification = (id: string, createdAt: string, readAt?: string) => repository.saveNotifications([{
+      id, tenantId: DEMO_TENANT_ID, recipientId: DEMO_PRODUCT_OWNER_ID, actorType: "system",
+      kind: "task_due_soon", title: "任务临期：巡检机房", body: "约 1.0 天后到期，请及时推进。",
+      refType: "work_package", refId: task.id, packageId: task.id, sourceEventId: `retention-seed:${id}`,
+      createdAt, readAt,
+    }]);
+    const now = new Date("2026-09-10T09:00:00.000Z");
+    const daysAgo = (days: number) => new Date(now.getTime() - days * 86_400_000).toISOString();
+    await seedNotification("old-read", daysAgo(40), daysAgo(39));
+    await seedNotification("fresh-unread", daysAgo(1));
+    const remaining = async () => (await service.notifications({ ...publisher, actorId: DEMO_PRODUCT_OWNER_ID }, { limit: 100 })).notifications.map((item) => item.id);
+
+    // 第一次周期：清理跑一次，老已读通知被删、新的未读留下。
+    expect(await service.pruneNotifications({ tenantId: DEMO_TENANT_ID, now })).toMatchObject({ readPruned: 1, expiredPruned: 0 });
+
+    const worker = new TaskReminderWorker(service, { ...options, intervalMs: 86_400_000, summary: { enabled: false, scope: "daily" } });
+    // 同一天第二次周期：留存清理不再重复执行（提醒间隔也还没到），整体 idle。
+    expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", now)).toEqual({ role: "task-reminder", status: "succeeded" });
+    expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", new Date(now.getTime() + 60_000))).toEqual({ role: "task-reminder", status: "idle" });
+    // 跨天后重新执行一次，没有候选也不报错。
+    expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", new Date("2026-09-11T09:00:00.000Z"))).toEqual({ role: "task-reminder", status: "succeeded" });
+    expect(await remaining()).toContain("fresh-unread");
+    expect(await remaining()).not.toContain("old-read");
+  });
+
+  it("留存清理失败不推进当天标记（下个周期立即重试）", async () => {
+    class FlakyRetentionRepository extends InMemoryTaskCommandRepository {
+      failing = true;
+      async deleteNotifications(tenantId: string, input: { createdBefore: string; onlyRead: boolean; limit: number }) {
+        if (this.failing) throw new Error("NOTIFICATION_RETENTION_TIMEOUT");
+        return super.deleteNotifications(tenantId, input);
+      }
+    }
+    const repository = new FlakyRetentionRepository();
+    const service = new TaskCommandService(repository, { ...DEFAULT_NOTIFICATION_RETENTION_OPTIONS, readDays: 30, maxAgeDays: 365, batchSize: 10 });
+    const publisher = createDevelopmentRequestContext("retention-retry");
+    const conversation = (await service.workspace(publisher)).conversation;
+    const task = await publishDueTask(service, publisher, conversation.id, "2026-09-11T10:00:00.000Z");
+    const now = new Date("2026-09-10T09:00:00.000Z");
+    await repository.saveNotifications([{
+      id: "old-read", tenantId: DEMO_TENANT_ID, recipientId: DEMO_PRODUCT_OWNER_ID, actorType: "system",
+      kind: "task_due_soon", title: "任务临期：巡检机房", body: "约 1.0 天后到期，请及时推进。",
+      refType: "work_package", refId: task.id, packageId: task.id, sourceEventId: "retention-retry-seed",
+      createdAt: new Date(now.getTime() - 40 * 86_400_000).toISOString(), readAt: new Date(now.getTime() - 39 * 86_400_000).toISOString(),
+    }]);
+    const worker = new TaskReminderWorker(service, { ...options, intervalMs: 86_400_000, summary: { enabled: false, scope: "daily" } });
+
+    expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", now)).toEqual({ role: "task-reminder", status: "failed" });
+    // 失败没有推进"今天已做"标记，所以下个周期立刻重试并成功。
+    repository.failing = false;
+    expect(await worker.processTenant(DEMO_TENANT_ID, "worker-1", new Date(now.getTime() + 1_000))).toEqual({ role: "task-reminder", status: "succeeded" });
+    const remaining = (await service.notifications({ ...publisher, actorId: DEMO_PRODUCT_OWNER_ID }, { limit: 100 })).notifications;
+    expect(remaining.map((item) => item.id)).not.toContain("old-read");
   });
 });

@@ -34,6 +34,11 @@ export interface TaskCommandRepository {
   getNotification(tenantId: string, id: string): Promise<WorkTaskNotification | null>;
   markNotificationRead(tenantId: string, id: string, recipientId: string, readAt: string): Promise<boolean>;
   markAllNotificationsRead(tenantId: string, recipientId: string, readAt: string): Promise<number>;
+  /**
+   * 留存清理：删除 `createdAt < createdBefore` 的通知，`onlyRead=true` 时只删已读的。
+   * 返回真正删除的条数（调用方按批循环，达到上限就停）。
+   */
+  deleteNotifications(tenantId: string, input: { createdBefore: string; onlyRead: boolean; limit: number }): Promise<number>;
   listPoolMessages(tenantId: string): Promise<WorkPoolMessage[]>;
   listPoolFeedback(tenantId: string, messageIds: string[]): Promise<WorkPoolFeedback[]>;
   getPoolMessage(tenantId: string, id: string): Promise<WorkPoolMessage | null>;

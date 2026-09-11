@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { RequestContext } from "@/src/platform/context/request-context";
 import type { TaskCommandRepository } from "@/src/modules/task-command/application/contracts";
+import { DEFAULT_NOTIFICATION_RETENTION_OPTIONS, NotificationRetentionService, type NotificationRetentionOptions } from "@/src/modules/task-command/application/notification-retention";
 import type { AddPackageSubtaskInput, AppendPoolFeedbackInput, AppendTaskArtifactVersionInput, CreateTaskTemplateInput, DeletePackageSubtaskInput, ExportReportInput, InitiateTaskHandoffInput, ListPackageSubtasksInput, PublishMissionInput, PublishPoolMessageInput, RegisterTaskArtifactInput, RespondToTaskHandoffInput, RunReminderScanInput, TransitionPackageInput, UpdatePackageSubtaskInput, UpdateTaskTemplateInput } from "@/src/modules/task-command/application/schemas";
 import { canMutatePackageSubtasks, claimWorkPackage, collectTaskReminderCandidates, completeWorkPackageSubtask, createConversationMessage, createMissionBundle, createPoolFeedback, createPoolMessage, createTaskHandoff, createTaskTemplateBundle, createWorkPackageSubtask, createWorkTaskNotification, deterministicUuid, dueStateOf, handoffWorkPackage, reopenWorkPackageSubtask, respondToTaskHandoff, revokeTaskHandoff, transitionWorkPackage, type WorkArtifact, type WorkArtifactVersion, type WorkConversationMessage, type WorkMessageEvent, type WorkMessagePool, type WorkPackage, type WorkPoolMessage, type WorkTaskEvent, type WorkTaskHandoffArtifactSnapshot, type WorkTaskNotification, type WorkTemplateField } from "@/src/modules/task-command/domain/task-command";
 
@@ -147,7 +148,14 @@ function updateTemplateMissingFields(current: WorkTemplateField[], input: Update
 }
 
 export class TaskCommandService {
-  constructor(private readonly repository: TaskCommandRepository) {}
+  private readonly notificationRetention: NotificationRetentionService;
+
+  constructor(
+    private readonly repository: TaskCommandRepository,
+    notificationRetentionOptions: NotificationRetentionOptions = DEFAULT_NOTIFICATION_RETENTION_OPTIONS,
+  ) {
+    this.notificationRetention = new NotificationRetentionService(repository, notificationRetentionOptions);
+  }
 
   /** Resolve the user's primary conversation without loading the full workspace. */
   async primaryConversation(context: RequestContext) {
@@ -1081,6 +1089,16 @@ export class TaskCommandService {
       blockedEscalationHours: input.blockedEscalationHours ?? 24,
       attribution: { source: "system", actorType: "system" },
     });
+  }
+
+  /**
+   * P4（留存）：站内通知的留存清理系统入口。与提醒/摘要一样只由后台 Worker 与手工脚本调用，
+   * 不开放 HTTP/Agent 通道——"删数据"不是业务动作，也不该由某个同事的身份发起。
+   *
+   * 幂等：重复运行只会继续删下一批候选；`enabled=false` 时直接返回、连库都不查。
+   */
+  async pruneNotifications(input: { tenantId: string; now?: Date }) {
+    return this.notificationRetention.pruneTenant(input);
   }
 
   /** 提醒扫描的唯一实现：池消息（公司池公告）与"提醒到人"的通知共用同一批候选。 */

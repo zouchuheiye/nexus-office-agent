@@ -268,6 +268,21 @@ export class InMemoryTaskCommandRepository implements TaskCommandRepository {
     this.notifications.push(structuredClone(value));
   }
 
+  /** 留存清理：与 Postgres 侧同一语义（先按最早创建时间排序，再按批删除）。 */
+  async deleteNotifications(tenantId: string, input: { createdBefore: string; onlyRead: boolean; limit: number }) {
+    const doomed = this.notifications
+      .filter((item) => item.tenantId === tenantId && item.createdAt < input.createdBefore && (input.onlyRead !== true || Boolean(item.readAt)))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+      .slice(0, Math.max(input.limit, 1))
+      .map((item) => item.id);
+    if (!doomed.length) return 0;
+    const removing = new Set(doomed);
+    for (let index = this.notifications.length - 1; index >= 0; index -= 1) {
+      if (removing.has(this.notifications[index].id)) this.notifications.splice(index, 1);
+    }
+    return doomed.length;
+  }
+
   async listPoolMessages(tenantId: string) {
     return structuredClone(this.poolMessages.filter((item) => item.tenantId === tenantId).sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
   }
